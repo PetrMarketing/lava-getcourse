@@ -241,6 +241,26 @@ app.delete('/api/rules/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── GetCourse Groups ───
+
+app.get('/api/gc/groups', async (req, res) => {
+  const settings = db.prepare('SELECT gc_account, gc_secret FROM settings WHERE id = ?').get('main');
+  if (!settings?.gc_account || !settings?.gc_secret) return res.status(400).json({ error: 'GetCourse не настроен' });
+  try {
+    const body = new URLSearchParams({ key: settings.gc_secret });
+    const gcRes = await fetch(`https://${settings.gc_account}.getcourse.ru/pl/api/account/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+    if (!gcRes.ok) return res.status(gcRes.status).json({ error: `GC HTTP ${gcRes.status}` });
+    const data = await gcRes.json();
+    res.json(data.info || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Logs ───
 
 app.get('/api/logs', (req, res) => {
@@ -269,6 +289,12 @@ app.get('/api/logs/stats', (req, res) => {
   res.json({ total, success, errors, last_sync_at: lastSync });
 });
 
+app.delete('/api/logs/clear', (req, res) => {
+  db.prepare('DELETE FROM sync_log').run();
+  db.prepare("UPDATE settings SET last_sync_at = '' WHERE id = 'main'").run();
+  res.json({ success: true });
+});
+
 // ─── LavaTop Products ───
 
 app.get('/api/lava/products', async (req, res) => {
@@ -285,6 +311,36 @@ app.get('/api/lava/products', async (req, res) => {
     }
     const data = await lavaRes.json();
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/lava/all-products', async (req, res) => {
+  const settings = db.prepare('SELECT lava_api_key FROM settings WHERE id = ?').get('main');
+  if (!settings?.lava_api_key) return res.status(400).json({ error: 'API ключ LavaTop не настроен' });
+  const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
+  const products = new Map();
+  try {
+    // From /v2/products (active products)
+    const pRes = await fetch('https://gate.lava.top/api/v2/products', { headers });
+    if (pRes.ok) {
+      const pData = await pRes.json();
+      for (const p of (pData.items || [])) {
+        products.set(p.id, { id: p.id, name: p.title, type: p.type, offers: p.offers || [] });
+      }
+    }
+    // From /v1/sales (includes deleted products)
+    const sRes = await fetch('https://gate.lava.top/api/v1/sales/?page=1&size=100', { headers });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      for (const s of (sData.items || [])) {
+        if (!products.has(s.productId)) {
+          products.set(s.productId, { id: s.productId, name: s.title, type: 'FROM_SALES', offers: [] });
+        }
+      }
+    }
+    res.json(Array.from(products.values()));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -373,12 +429,26 @@ async function syncPayments(manual = false) {
           }
 
           // Find matching rule first, then fall back to mapping
+          // Pre-check: resolve user status in GC if any rule needs it
+          let gcUserStatus = null; // null = not checked, 'added' = new, 'updated' = exists
+          const needsGcCheck = rules.some(r => r.condition_type === 'user_exists_gc' || r.condition_type === 'user_not_exists_gc');
+          if (needsGcCheck) {
+            try {
+              const checkRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
+              gcUserStatus = checkRes.success ? (checkRes.result?.user_status || 'updated') : null;
+            } catch (e) { gcUserStatus = null; }
+          }
+
           const matchedRule = rules.find(r => {
-            const val = r.condition_value.toLowerCase();
+            const val = (r.condition_value || '').toLowerCase();
             if (r.condition_type === 'product_equals') return productName.toLowerCase() === val;
             if (r.condition_type === 'product_contains') return productName.toLowerCase().includes(val);
             if (r.condition_type === 'email_contains') return buyerEmail.toLowerCase().includes(val);
+            if (r.condition_type === 'email_equals') return buyerEmail.toLowerCase() === val;
             if (r.condition_type === 'amount_gte') return amount >= parseFloat(r.condition_value);
+            if (r.condition_type === 'amount_lte') return amount <= parseFloat(r.condition_value);
+            if (r.condition_type === 'user_exists_gc') return gcUserStatus === 'updated';
+            if (r.condition_type === 'user_not_exists_gc') return gcUserStatus === 'added';
             return false;
           });
 

@@ -281,7 +281,8 @@ tr:hover td { background: #1c2128; }
         <option value="success">Успешно</option>
         <option value="error">Ошибки</option>
       </select>
-      <div style="margin-left: auto;">
+      <div style="margin-left: auto; display: flex; gap: 8px;">
+        <button class="btn btn-danger btn-sm" onclick="clearLogs()">Очистить журнал</button>
         <button class="btn btn-success" id="btnSync" onclick="manualSync()">Синхронизировать сейчас</button>
       </div>
     </div>
@@ -366,20 +367,22 @@ tr:hover td { background: #1c2128; }
       <label>Название правила</label>
       <input type="text" id="ruleName" placeholder="Например: Покупка консультации">
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Условие</label>
-        <select id="ruleConditionType">
-          <option value="product_equals">Продукт равен</option>
-          <option value="product_contains">Продукт содержит</option>
-          <option value="email_contains">Email содержит</option>
-          <option value="amount_gte">Сумма >=</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Значение</label>
-        <input type="text" id="ruleConditionValue" placeholder="Название продукта" list="lavaProductsList">
-      </div>
+    <div class="form-group">
+      <label>Условие</label>
+      <select id="ruleConditionType" onchange="onConditionTypeChange()">
+        <option value="product_equals">Продукт равен</option>
+        <option value="product_contains">Продукт содержит</option>
+        <option value="email_equals">Email равен</option>
+        <option value="email_contains">Email содержит</option>
+        <option value="amount_gte">Сумма &gt;=</option>
+        <option value="amount_lte">Сумма &lt;=</option>
+        <option value="user_exists_gc">Пользователь есть в GetCourse</option>
+        <option value="user_not_exists_gc">Пользователя нет в GetCourse</option>
+      </select>
+    </div>
+    <div class="form-group" id="ruleConditionValueWrap">
+      <label id="ruleConditionValueLabel">Значение</label>
+      <div id="ruleConditionValueContainer"></div>
     </div>
     <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
       <label style="font-size: 13px; color: #8b949e;">Действия (выполняются по порядку)</label>
@@ -400,6 +403,8 @@ tr:hover td { background: #1c2128; }
 // ─── State ───
 let currentPage = 1;
 let lavaProducts = [];
+let gcGroups = [];
+let dataLoaded = false;
 
 // ─── Toast ───
 function toast(msg, type = 'info', duration = 3000) {
@@ -710,8 +715,27 @@ async function manualSync() {
   btn.textContent = 'Синхронизировать сейчас';
 }
 
+// ─── Data loaders ───
+async function ensureDataLoaded() {
+  if (dataLoaded) return;
+  dataLoaded = true;
+  try {
+    const [productsData, groupsData] = await Promise.all([
+      api('GET', '/api/lava/all-products').catch(() => []),
+      api('GET', '/api/gc/groups').catch(() => [])
+    ]);
+    lavaProducts = Array.isArray(productsData) ? productsData : (productsData.items || []);
+    gcGroups = Array.isArray(groupsData) ? groupsData : [];
+  } catch (e) { console.error('Data load error:', e); }
+}
+
 // ─── Rules ───
-const conditionLabels = { product_equals: 'Продукт =', product_contains: 'Продукт содержит', email_contains: 'Email содержит', amount_gte: 'Сумма >=' };
+const conditionLabels = {
+  product_equals: 'Продукт =', product_contains: 'Продукт содержит',
+  email_equals: 'Email =', email_contains: 'Email содержит',
+  amount_gte: 'Сумма >=', amount_lte: 'Сумма <=',
+  user_exists_gc: 'Пользователь есть в GC', user_not_exists_gc: 'Пользователя нет в GC'
+};
 const actionLabelsMap = { authorize: 'Авторизовать', add_to_group: 'Добавить в группу', grant_product: 'Выдать продукт' };
 const actionIcons = { authorize: '&#128100;', add_to_group: '&#128101;', grant_product: '&#127891;' };
 const actionIconClass = { authorize: 'authorize', add_to_group: 'group', grant_product: 'product' };
@@ -735,6 +759,7 @@ async function loadRules() {
         </div>`;
       }).join('');
 
+      const showValue = !['user_exists_gc','user_not_exists_gc'].includes(r.condition_type);
       return `<div class="rule-card ${r.is_active ? '' : 'inactive'}">
         <div class="rule-header">
           <div>
@@ -749,7 +774,7 @@ async function loadRules() {
         </div>
         <div class="rule-condition">
           <span class="cond-label">${conditionLabels[r.condition_type] || r.condition_type}</span>
-          <span class="cond-value">${esc(r.condition_value)}</span>
+          ${showValue ? `<span class="cond-value">${esc(r.condition_value)}</span>` : ''}
         </div>
         <div class="rule-actions-list">${actionsHtml || '<div style="color:#8b949e;font-size:13px;">Нет действий</div>'}</div>
       </div>`;
@@ -759,12 +784,13 @@ async function loadRules() {
   }
 }
 
-function openRuleModal(data) {
+async function openRuleModal(data) {
+  await ensureDataLoaded();
   document.getElementById('ruleEditId').value = data?.id || '';
   document.getElementById('ruleModalTitle').textContent = data ? 'Редактировать правило' : 'Добавить правило';
   document.getElementById('ruleName').value = data?.name || '';
   document.getElementById('ruleConditionType').value = data?.condition_type || 'product_equals';
-  document.getElementById('ruleConditionValue').value = data?.condition_value || '';
+  renderConditionValueInput(data?.condition_type || 'product_equals', data?.condition_value || '');
   const container = document.getElementById('ruleActionsContainer');
   container.innerHTML = '';
   if (data?.actions?.length) {
@@ -779,9 +805,45 @@ function closeRuleModal() {
   document.getElementById('ruleModal').classList.remove('active');
 }
 
+function onConditionTypeChange() {
+  const type = document.getElementById('ruleConditionType').value;
+  renderConditionValueInput(type, '');
+}
+
+function renderConditionValueInput(type, currentValue) {
+  const wrap = document.getElementById('ruleConditionValueWrap');
+  const label = document.getElementById('ruleConditionValueLabel');
+  const container = document.getElementById('ruleConditionValueContainer');
+
+  if (type === 'user_exists_gc' || type === 'user_not_exists_gc') {
+    wrap.style.display = 'none';
+    container.innerHTML = '<input type="hidden" id="ruleConditionValue" value="*">';
+    return;
+  }
+  wrap.style.display = 'block';
+
+  if (type === 'product_equals') {
+    label.textContent = 'Продукт';
+    const opts = lavaProducts.map(p => `<option value="${esc(p.name)}" ${p.name === currentValue ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+    container.innerHTML = `<select id="ruleConditionValue" style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;">
+      <option value="">— Выберите продукт —</option>${opts}</select>`;
+  } else if (type === 'product_contains') {
+    label.textContent = 'Содержит текст';
+    container.innerHTML = `<input type="text" id="ruleConditionValue" value="${esc(currentValue)}" placeholder="Часть названия продукта" style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;">`;
+  } else if (type === 'email_equals' || type === 'email_contains') {
+    label.textContent = type === 'email_equals' ? 'Email' : 'Содержит';
+    container.innerHTML = `<input type="text" id="ruleConditionValue" value="${esc(currentValue)}" placeholder="email@example.com" style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;">`;
+  } else if (type === 'amount_gte' || type === 'amount_lte') {
+    label.textContent = type === 'amount_gte' ? 'Сумма >= (минимум)' : 'Сумма <= (максимум)';
+    container.innerHTML = `<input type="number" id="ruleConditionValue" value="${esc(currentValue)}" placeholder="0" step="0.01" style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;">`;
+  } else {
+    label.textContent = 'Значение';
+    container.innerHTML = `<input type="text" id="ruleConditionValue" value="${esc(currentValue)}" style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;">`;
+  }
+}
+
 function addRuleAction(data) {
   const container = document.getElementById('ruleActionsContainer');
-  const idx = container.children.length;
   const div = document.createElement('div');
   div.className = 'action-row';
   div.innerHTML = `
@@ -807,7 +869,12 @@ function renderActionParams(row, type, data) {
   if (type === 'authorize') {
     params.innerHTML = '<span style="color:#8b949e;font-size:12px;">Создаёт/обновляет пользователя в GetCourse</span>';
   } else if (type === 'add_to_group') {
-    params.innerHTML = `<input type="text" placeholder="Название группы" value="${esc(data?.group_name || '')}" data-field="group_name">`;
+    const opts = gcGroups.map(g => `<option value="${esc(g.name)}" ${g.name === data?.group_name ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
+    params.innerHTML = `<select data-field="group_name" style="width:100%;">
+      <option value="">— Выберите группу —</option>${opts}</select>`;
+    if (data?.group_name && !gcGroups.find(g => g.name === data.group_name)) {
+      params.querySelector('select').insertAdjacentHTML('beforeend', `<option value="${esc(data.group_name)}" selected>${esc(data.group_name)}</option>`);
+    }
   } else if (type === 'grant_product') {
     params.innerHTML = `
       <input type="text" placeholder="Код оффера (offer_code)" value="${esc(data?.offer_code || '')}" data-field="offer_code">
@@ -821,8 +888,9 @@ function collectRuleActions() {
   return Array.from(rows).map(row => {
     const type = row.querySelector('select').value;
     const action = { type };
-    row.querySelectorAll('input[data-field]').forEach(inp => {
-      if (inp.value.trim()) action[inp.dataset.field] = inp.value.trim();
+    row.querySelectorAll('[data-field]').forEach(el => {
+      const val = el.value.trim();
+      if (val) action[el.dataset.field] = val;
     });
     return action;
   });
@@ -830,13 +898,16 @@ function collectRuleActions() {
 
 async function saveRule() {
   const id = document.getElementById('ruleEditId').value;
+  const condType = document.getElementById('ruleConditionType').value;
+  const condValue = document.getElementById('ruleConditionValue').value.trim();
+  const noValueNeeded = ['user_exists_gc', 'user_not_exists_gc'].includes(condType);
   const data = {
     name: document.getElementById('ruleName').value.trim(),
-    condition_type: document.getElementById('ruleConditionType').value,
-    condition_value: document.getElementById('ruleConditionValue').value.trim(),
+    condition_type: condType,
+    condition_value: noValueNeeded ? '*' : condValue,
     actions: collectRuleActions()
   };
-  if (!data.condition_value) { toast('Укажите значение условия', 'error'); return; }
+  if (!noValueNeeded && !data.condition_value) { toast('Укажите значение условия', 'error'); return; }
   if (!data.actions.length) { toast('Добавьте хотя бы одно действие', 'error'); return; }
 
   try {
@@ -878,6 +949,18 @@ async function deleteRule(id) {
     await api('DELETE', `/api/rules/${id}`);
     loadRules();
     toast('Правило удалено', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function clearLogs() {
+  if (!confirm('Очистить весь журнал и сбросить дату синхронизации?')) return;
+  try {
+    await api('DELETE', '/api/logs/clear');
+    loadLogs();
+    loadStats();
+    toast('Журнал очищен', 'success');
   } catch (e) {
     toast('Ошибка: ' + e.message, 'error');
   }
