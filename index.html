@@ -146,6 +146,21 @@ tr:hover td { background: #1c2128; }
 .action-row .btn-remove:hover { background: rgba(248,81,73,0.15); border-radius: 4px; }
 .action-params { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 
+/* Condition blocks */
+.condition-block { margin-top: 8px; padding: 10px; border-radius: 6px; border: 1px dashed #30363d; background: #161b22; }
+.condition-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+.condition-label.then { color: #3fb950; }
+.condition-label.else { color: #f85149; }
+.condition-block .action-row { background: #1c2128; border-color: #30363d; }
+.condition-select { width: 100%; padding: 6px 8px; background: #161b22; border: 1px solid #30363d; border-radius: 4px; color: #e1e4e8; font-size: 13px; margin-bottom: 8px; }
+.action-row.condition-row { flex-direction: column; align-items: stretch; }
+.action-row.condition-row > .action-row-header { display: flex; gap: 8px; align-items: center; }
+.rule-action-item .action-icon.condition { background: rgba(240,136,62,0.2); color: #f0883e; }
+.rule-condition-branch { margin-left: 36px; padding: 6px 0 2px 12px; border-left: 2px solid #30363d; }
+.rule-condition-branch .branch-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.rule-condition-branch .branch-label.then { color: #3fb950; }
+.rule-condition-branch .branch-label.else { color: #f85149; }
+
 /* Responsive */
 @media (max-width: 768px) {
   .form-row { grid-template-columns: 1fr; }
@@ -377,6 +392,7 @@ tr:hover td { background: #1c2128; }
         <option value="user_authorized">Авторизован пользователь</option>
         <option value="added_to_group">Добавлен в группу</option>
         <option value="product_granted">Выдан продукт</option>
+        <option value="condition_checked">Условие проверено</option>
         <option value="gc_error">Ошибка GC</option>
       </select>
       <button class="btn btn-secondary btn-sm" onclick="loadActionLog()">Найти</button>
@@ -451,7 +467,7 @@ tr:hover td { background: #1c2128; }
 
 <!-- Rule Modal -->
 <div class="modal-overlay" id="ruleModal">
-  <div class="modal" style="width: 580px;">
+  <div class="modal" style="width: 640px;">
     <h3 id="ruleModalTitle">Добавить правило</h3>
     <input type="hidden" id="ruleEditId">
     <div class="form-group">
@@ -830,9 +846,35 @@ const conditionLabels = {
   amount_gte: 'Сумма >=', amount_lte: 'Сумма <=',
   user_exists_gc: 'Пользователь есть в GC', user_not_exists_gc: 'Пользователя нет в GC'
 };
-const actionLabelsMap = { authorize: 'Авторизовать', add_to_group: 'Добавить в группу', grant_product: 'Выдать продукт' };
-const actionIcons = { authorize: '&#128100;', add_to_group: '&#128101;', grant_product: '&#127891;' };
-const actionIconClass = { authorize: 'authorize', add_to_group: 'group', grant_product: 'product' };
+const actionLabelsMap = { authorize: 'Авторизовать', add_to_group: 'Добавить в группу', grant_product: 'Выдать продукт', condition: 'Условие' };
+const actionIcons = { authorize: '&#128100;', add_to_group: '&#128101;', grant_product: '&#127891;', condition: '&#9878;' };
+const actionIconClass = { authorize: 'authorize', add_to_group: 'group', grant_product: 'product', condition: 'condition' };
+const conditionActionLabels = { user_exists_gc: 'Пользователь есть в GC', user_not_exists_gc: 'Пользователя нет в GC' };
+
+function renderRuleActionsHtml(actions) {
+  return (actions || []).map(a => {
+    if (a.type === 'condition') {
+      const condLabel = conditionActionLabels[a.condition] || a.condition;
+      const thenHtml = renderRuleActionsHtml(a.then_actions || []);
+      const elseHtml = renderRuleActionsHtml(a.else_actions || []);
+      return `<div class="rule-action-item" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div class="action-icon condition">${actionIcons.condition}</div>
+          <div class="action-detail">Если: <strong>${esc(condLabel)}</strong></div>
+        </div>
+        <div class="rule-condition-branch"><div class="branch-label then">Тогда:</div><div class="rule-actions-list">${thenHtml || '<span style="color:#8b949e;font-size:12px;">—</span>'}</div></div>
+        <div class="rule-condition-branch"><div class="branch-label else">Иначе:</div><div class="rule-actions-list">${elseHtml || '<span style="color:#8b949e;font-size:12px;">—</span>'}</div></div>
+      </div>`;
+    }
+    let detail = actionLabelsMap[a.type] || a.type;
+    if (a.type === 'add_to_group') detail += `: <strong>${esc(a.group_name)}</strong>`;
+    if (a.type === 'grant_product') detail += `: <strong>${esc(a.product_title || a.offer_code || '')}</strong>`;
+    return `<div class="rule-action-item">
+      <div class="action-icon ${actionIconClass[a.type] || ''}">${actionIcons[a.type] || '?'}</div>
+      <div class="action-detail">${detail}</div>
+    </div>`;
+  }).join('');
+}
 
 async function loadRules() {
   try {
@@ -843,15 +885,7 @@ async function loadRules() {
       return;
     }
     container.innerHTML = rules.map(r => {
-      const actionsHtml = r.actions.map(a => {
-        let detail = actionLabelsMap[a.type] || a.type;
-        if (a.type === 'add_to_group') detail += `: <strong>${esc(a.group_name)}</strong>`;
-        if (a.type === 'grant_product') detail += `: <strong>${esc(a.product_title || a.offer_code || '')}</strong>`;
-        return `<div class="rule-action-item">
-          <div class="action-icon ${actionIconClass[a.type] || ''}">${actionIcons[a.type] || '?'}</div>
-          <div class="action-detail">${detail}</div>
-        </div>`;
-      }).join('');
+      const actionsHtml = renderRuleActionsHtml(r.actions);
 
       const showValue = !['user_exists_gc','user_not_exists_gc'].includes(r.condition_type);
       return `<div class="rule-card ${r.is_active ? '' : 'inactive'}">
@@ -936,18 +970,21 @@ function renderConditionValueInput(type, currentValue) {
   }
 }
 
-function addRuleAction(data) {
-  const container = document.getElementById('ruleActionsContainer');
+function addRuleAction(data, container) {
+  if (!container) container = document.getElementById('ruleActionsContainer');
   const div = document.createElement('div');
-  div.className = 'action-row';
+  div.className = 'action-row' + (data?.type === 'condition' ? ' condition-row' : '');
   div.innerHTML = `
-    <select onchange="onActionTypeChange(this)">
-      <option value="authorize" ${data?.type === 'authorize' ? 'selected' : ''}>Авторизовать в GC</option>
-      <option value="add_to_group" ${data?.type === 'add_to_group' ? 'selected' : ''}>Добавить в группу</option>
-      <option value="grant_product" ${data?.type === 'grant_product' ? 'selected' : ''}>Выдать доступ к продукту</option>
-    </select>
+    <div class="action-row-header">
+      <select onchange="onActionTypeChange(this)">
+        <option value="authorize" ${data?.type === 'authorize' ? 'selected' : ''}>Авторизовать в GC</option>
+        <option value="add_to_group" ${data?.type === 'add_to_group' ? 'selected' : ''}>Добавить в группу</option>
+        <option value="grant_product" ${data?.type === 'grant_product' ? 'selected' : ''}>Выдать доступ к продукту</option>
+        <option value="condition" ${data?.type === 'condition' ? 'selected' : ''}>Условие (если/иначе)</option>
+      </select>
+      <button class="btn-remove" onclick="this.closest('.action-row').remove()" title="Удалить">&times;</button>
+    </div>
     <div class="action-params"></div>
-    <button class="btn-remove" onclick="this.parentElement.remove()" title="Удалить">&times;</button>
   `;
   container.appendChild(div);
   renderActionParams(div, data?.type || 'authorize', data);
@@ -960,6 +997,8 @@ function onActionTypeChange(sel) {
 
 function renderActionParams(row, type, data) {
   const params = row.querySelector('.action-params');
+  // Toggle condition-row class
+  row.classList.toggle('condition-row', type === 'condition');
   if (type === 'authorize') {
     params.innerHTML = '<span style="color:#8b949e;font-size:12px;">Создаёт/обновляет пользователя в GetCourse</span>';
   } else if (type === 'add_to_group') {
@@ -974,15 +1013,63 @@ function renderActionParams(row, type, data) {
       <input type="text" placeholder="Код оффера (offer_code)" value="${esc(data?.offer_code || '')}" data-field="offer_code">
       <input type="text" placeholder="Название продукта (product_title)" value="${esc(data?.product_title || '')}" data-field="product_title" style="margin-top:4px;">
     `;
+  } else if (type === 'condition') {
+    params.innerHTML = `
+      <select class="condition-select" data-field="condition">
+        <option value="user_exists_gc" ${data?.condition === 'user_exists_gc' ? 'selected' : ''}>Пользователь есть в GC</option>
+        <option value="user_not_exists_gc" ${data?.condition === 'user_not_exists_gc' ? 'selected' : ''}>Пользователя нет в GC</option>
+      </select>
+      <div class="condition-block">
+        <div class="condition-label then"><span>&#9989; Тогда:</span><button class="btn btn-secondary btn-sm" onclick="addNestedAction(this, 'then')">+ Действие</button></div>
+        <div class="nested-actions" data-branch="then"></div>
+      </div>
+      <div class="condition-block">
+        <div class="condition-label else"><span>&#10060; Иначе:</span><button class="btn btn-secondary btn-sm" onclick="addNestedAction(this, 'else')">+ Действие</button></div>
+        <div class="nested-actions" data-branch="else"></div>
+      </div>
+    `;
+    // Populate existing then/else actions
+    const thenContainer = params.querySelector('[data-branch="then"]');
+    const elseContainer = params.querySelector('[data-branch="else"]');
+    (data?.then_actions || []).forEach(a => addRuleAction(a, thenContainer));
+    (data?.else_actions || []).forEach(a => addRuleAction(a, elseContainer));
   }
 }
 
-function collectRuleActions() {
-  const rows = document.querySelectorAll('#ruleActionsContainer .action-row');
-  return Array.from(rows).map(row => {
-    const type = row.querySelector('select').value;
+function addNestedAction(btn, branch) {
+  const block = btn.closest('.condition-block');
+  const container = block.querySelector('.nested-actions');
+  addRuleAction({ type: 'authorize' }, container);
+  // Remove "condition" option from nested selects to prevent infinite nesting
+  const lastRow = container.lastElementChild;
+  if (lastRow) {
+    const sel = lastRow.querySelector('.action-row-header select');
+    if (sel) {
+      const condOpt = sel.querySelector('option[value="condition"]');
+      if (condOpt) condOpt.remove();
+    }
+  }
+}
+
+function collectRuleActions(container) {
+  if (!container) container = document.getElementById('ruleActionsContainer');
+  // Only collect direct child action-rows (not nested ones inside condition blocks)
+  const rows = Array.from(container.children).filter(el => el.classList.contains('action-row'));
+  return rows.map(row => {
+    const type = row.querySelector('.action-row-header select').value;
+    if (type === 'condition') {
+      const condSelect = row.querySelector('.action-params [data-field="condition"]');
+      const thenContainer = row.querySelector('.action-params [data-branch="then"]');
+      const elseContainer = row.querySelector('.action-params [data-branch="else"]');
+      return {
+        type: 'condition',
+        condition: condSelect ? condSelect.value : 'user_exists_gc',
+        then_actions: thenContainer ? collectRuleActions(thenContainer) : [],
+        else_actions: elseContainer ? collectRuleActions(elseContainer) : []
+      };
+    }
     const action = { type };
-    row.querySelectorAll('[data-field]').forEach(el => {
+    row.querySelectorAll('.action-params [data-field]').forEach(el => {
       const val = el.value.trim();
       if (val) action[el.dataset.field] = val;
     });
@@ -1108,6 +1195,7 @@ const actionTypeLabels = {
   user_authorized: 'Авторизован',
   added_to_group: 'Добавлен в группу',
   product_granted: 'Выдан продукт',
+  condition_checked: 'Условие проверено',
   gc_error: 'Ошибка GC'
 };
 
@@ -1116,6 +1204,7 @@ const actionTypeBadgeClass = {
   user_authorized: 'badge-info',
   added_to_group: 'badge-success',
   product_granted: 'badge-info',
+  condition_checked: 'badge-imported',
   gc_error: 'badge-error'
 };
 

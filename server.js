@@ -201,31 +201,9 @@ app.post('/api/webhook/lava', async (req, res) => {
 
     try {
       if (matchedRule) {
-        for (const action of matchedRule.actions) {
-          if (action.type === 'authorize') {
-            const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
-            if (userRes.success) {
-              gcUserId = String(userRes.result?.user_id || '');
-              const isNew = userRes.result?.user_status === 'added';
-              logAction(isNew ? 'user_created' : 'user_authorized', buyerEmail, { user_id: gcUserId, product: productName, rule: matchedRule.name, source: 'webhook' });
-            } else throw new Error(userRes.error_message || 'Ошибка авторизации');
-          } else if (action.type === 'add_to_group') {
-            const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail, group_name: [action.group_name] }, system: { refresh_if_exists: 1 } });
-            if (userRes.success) {
-              gcUserId = String(userRes.result?.user_id || '');
-              logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: action.group_name, product: productName, rule: matchedRule.name, source: 'webhook' });
-            } else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
-          } else if (action.type === 'grant_product') {
-            const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
-            if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
-            if (action.product_title) dealParams.deal.product_title = action.product_title;
-            const dealRes = await gcApiCall(settings, 'deals', dealParams);
-            if (dealRes.success) {
-              gcDealId = String(dealRes.result?.deal_id || '');
-              logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: action.offer_code, product: productName, rule: matchedRule.name, source: 'webhook' });
-            } else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
-          }
-        }
+        const result = await executeActions(matchedRule.actions, settings, buyerEmail, amount, productName, matchedRule.name, 'webhook');
+        gcUserId = result.gcUserId;
+        gcDealId = result.gcDealId;
       } else {
         if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
           const userParams = { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } };
@@ -743,44 +721,9 @@ async function syncPayments(manual = false) {
 
           try {
             if (matchedRule) {
-              // Execute rule actions sequentially
-              for (const action of matchedRule.actions) {
-                if (action.type === 'authorize') {
-                  const userRes = await gcApiCall(settings, 'users', {
-                    user: { email: buyerEmail },
-                    system: { refresh_if_exists: 1 }
-                  });
-                  if (userRes.success) {
-                    gcUserId = String(userRes.result?.user_id || '');
-                    const isNew = userRes.result?.user_status === 'added';
-                    logAction(isNew ? 'user_created' : 'user_authorized', buyerEmail, { user_id: gcUserId, product: productName, rule: matchedRule.name });
-                  } else throw new Error(userRes.error_message || 'Ошибка авторизации пользователя');
-
-                } else if (action.type === 'add_to_group') {
-                  const userRes = await gcApiCall(settings, 'users', {
-                    user: { email: buyerEmail, group_name: [action.group_name] },
-                    system: { refresh_if_exists: 1 }
-                  });
-                  if (userRes.success) {
-                    gcUserId = String(userRes.result?.user_id || '');
-                    logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: action.group_name, product: productName, rule: matchedRule.name });
-                  } else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
-
-                } else if (action.type === 'grant_product') {
-                  const dealParams = {
-                    user: { email: buyerEmail },
-                    deal: { deal_cost: amount, deal_is_paid: 'yes' },
-                    system: { refresh_if_exists: 1 }
-                  };
-                  if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
-                  if (action.product_title) dealParams.deal.product_title = action.product_title;
-                  const dealRes = await gcApiCall(settings, 'deals', dealParams);
-                  if (dealRes.success) {
-                    gcDealId = String(dealRes.result?.deal_id || '');
-                    logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: action.offer_code, product_title: action.product_title, product: productName, rule: matchedRule.name });
-                  } else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
-                }
-              }
+              const result = await executeActions(matchedRule.actions, settings, buyerEmail, amount, productName, matchedRule.name, 'sync');
+              gcUserId = result.gcUserId;
+              gcDealId = result.gcDealId;
             } else {
               // Legacy mapping logic
               if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
@@ -830,6 +773,49 @@ async function syncPayments(manual = false) {
     console.error('Sync error:', e.message);
     return { error: e.message, processed, errors };
   }
+}
+
+// ─── Shared Action Executor (used by webhook & sync) ───
+async function executeActions(actions, settings, buyerEmail, amount, productName, ruleName, source) {
+  let gcUserId = '', gcDealId = '';
+  for (const action of actions) {
+    if (action.type === 'condition') {
+      // Check user existence in GC
+      const checkRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
+      const userStatus = checkRes.success ? (checkRes.result?.user_status || 'updated') : null;
+      let conditionMet = false;
+      if (action.condition === 'user_exists_gc') conditionMet = userStatus === 'updated';
+      else if (action.condition === 'user_not_exists_gc') conditionMet = userStatus !== 'updated';
+      const branchActions = conditionMet ? (action.then_actions || []) : (action.else_actions || []);
+      logAction('condition_checked', buyerEmail, { condition: action.condition, result: conditionMet, branch: conditionMet ? 'then' : 'else', product: productName, rule: ruleName, source });
+      const result = await executeActions(branchActions, settings, buyerEmail, amount, productName, ruleName, source);
+      gcUserId = result.gcUserId || gcUserId;
+      gcDealId = result.gcDealId || gcDealId;
+    } else if (action.type === 'authorize') {
+      const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
+      if (userRes.success) {
+        gcUserId = String(userRes.result?.user_id || '');
+        const isNew = userRes.result?.user_status === 'added';
+        logAction(isNew ? 'user_created' : 'user_authorized', buyerEmail, { user_id: gcUserId, product: productName, rule: ruleName, source });
+      } else throw new Error(userRes.error_message || 'Ошибка авторизации пользователя');
+    } else if (action.type === 'add_to_group') {
+      const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail, group_name: [action.group_name] }, system: { refresh_if_exists: 1 } });
+      if (userRes.success) {
+        gcUserId = String(userRes.result?.user_id || '');
+        logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: action.group_name, product: productName, rule: ruleName, source });
+      } else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
+    } else if (action.type === 'grant_product') {
+      const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
+      if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
+      if (action.product_title) dealParams.deal.product_title = action.product_title;
+      const dealRes = await gcApiCall(settings, 'deals', dealParams);
+      if (dealRes.success) {
+        gcDealId = String(dealRes.result?.deal_id || '');
+        logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: action.offer_code, product_title: action.product_title, product: productName, rule: ruleName, source });
+      } else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
+    }
+  }
+  return { gcUserId, gcDealId };
 }
 
 async function gcApiCall(settings, endpoint, params) {
