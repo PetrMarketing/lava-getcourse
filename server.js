@@ -271,11 +271,11 @@ async function syncPayments(manual = false) {
   const mappings = db.prepare('SELECT * FROM mappings WHERE is_active = 1').all();
 
   try {
-    // Step 1: Get all products
-    const productsRes = await fetch('https://gate.lava.top/api/v2/products', { headers });
-    if (!productsRes.ok) throw new Error(`LavaTop products error: ${productsRes.status}`);
-    const productsData = await productsRes.json();
-    const products = productsData.items || productsData || [];
+    // Step 1: Get product list from sales overview (includes deleted products)
+    const salesOverviewRes = await fetch('https://gate.lava.top/api/v1/sales/?page=1&size=100', { headers });
+    if (!salesOverviewRes.ok) throw new Error(`LavaTop sales error: ${salesOverviewRes.status}`);
+    const salesOverview = await salesOverviewRes.json();
+    const products = (salesOverview.items || []).map(s => ({ id: s.productId, title: s.title }));
 
     // Step 2: For each product, fetch sales with pagination
     for (const product of products) {
