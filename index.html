@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LavaTop → GetCourse</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; min-height: 100vh; }
+
+/* Header */
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 20px; font-weight: 600; }
+.header h1 span { color: #7c5dfa; }
+.header .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8b949e; }
+.header .status .dot { width: 8px; height: 8px; border-radius: 50%; }
+.header .status .dot.active { background: #3fb950; }
+.header .status .dot.inactive { background: #f85149; }
+
+/* Tabs */
+.tabs { display: flex; background: #161b22; border-bottom: 1px solid #30363d; padding: 0 24px; }
+.tab-btn { padding: 12px 20px; font-size: 14px; color: #8b949e; background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; }
+.tab-btn:hover { color: #e1e4e8; }
+.tab-btn.active { color: #e1e4e8; border-bottom-color: #7c5dfa; }
+
+/* Content */
+.content { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Cards */
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.card h3 { font-size: 16px; margin-bottom: 16px; color: #e1e4e8; }
+
+/* Form */
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; }
+.form-group input, .form-group select { width: 100%; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e1e4e8; font-size: 14px; outline: none; transition: border-color 0.2s; }
+.form-group input:focus, .form-group select:focus { border-color: #7c5dfa; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* Buttons */
+.btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+.btn-primary { background: #7c5dfa; color: #fff; }
+.btn-primary:hover { background: #6c4de6; }
+.btn-secondary { background: #21262d; color: #e1e4e8; border: 1px solid #30363d; }
+.btn-secondary:hover { background: #30363d; }
+.btn-success { background: #238636; color: #fff; }
+.btn-success:hover { background: #2ea043; }
+.btn-danger { background: #da3633; color: #fff; }
+.btn-danger:hover { background: #f85149; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Toggle */
+.toggle-wrap { display: flex; align-items: center; gap: 12px; }
+.toggle { position: relative; width: 44px; height: 24px; cursor: pointer; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; inset: 0; background: #30363d; border-radius: 24px; transition: 0.3s; }
+.toggle .slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: #8b949e; border-radius: 50%; transition: 0.3s; }
+.toggle input:checked + .slider { background: #7c5dfa; }
+.toggle input:checked + .slider::before { transform: translateX(20px); background: #fff; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 10px 12px; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; white-space: nowrap; }
+td { padding: 10px 12px; border-bottom: 1px solid #21262d; }
+tr:hover td { background: #1c2128; }
+
+/* Badge */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.badge-success { background: rgba(56,139,66,0.2); color: #3fb950; }
+.badge-error { background: rgba(248,81,73,0.2); color: #f85149; }
+.badge-info { background: rgba(124,93,250,0.2); color: #a78bfa; }
+
+/* Stats */
+.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; }
+.stat-card .value { font-size: 28px; font-weight: 700; color: #e1e4e8; }
+.stat-card .label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+.stat-card.success .value { color: #3fb950; }
+.stat-card.error .value { color: #f85149; }
+
+/* Toast */
+.toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 12px 16px; border-radius: 8px; font-size: 14px; animation: slideIn 0.3s ease; max-width: 400px; }
+.toast-success { background: #238636; color: #fff; }
+.toast-error { background: #da3633; color: #fff; }
+.toast-info { background: #1f6feb; color: #fff; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Filters */
+.filters { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.filters input, .filters select { padding: 6px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e1e4e8; font-size: 13px; }
+
+/* Pagination */
+.pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
+
+/* Modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; width: 500px; max-width: 90vw; max-height: 80vh; overflow-y: auto; }
+.modal h3 { margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+/* Empty state */
+.empty-state { text-align: center; padding: 40px; color: #8b949e; }
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+/* Spinner */
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.test-results { display: flex; gap: 12px; margin-top: 12px; }
+.test-result { flex: 1; padding: 12px; border-radius: 6px; font-size: 13px; }
+.test-result.ok { background: rgba(56,139,66,0.15); border: 1px solid rgba(56,139,66,0.3); color: #3fb950; }
+.test-result.fail { background: rgba(248,81,73,0.15); border: 1px solid rgba(248,81,73,0.3); color: #f85149; }
+.test-result.pending { background: rgba(139,148,158,0.1); border: 1px solid #30363d; color: #8b949e; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .form-row { grid-template-columns: 1fr; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>LavaTop</span> → GetCourse</h1>
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Загрузка...</span>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('settings')">Настройки</button>
+  <button class="tab-btn" onclick="switchTab('mappings')">Маппинг продуктов</button>
+  <button class="tab-btn" onclick="switchTab('logs')">Журнал</button>
+</div>
+
+<div class="content">
+
+  <!-- ─── Settings Tab ─── -->
+  <div class="tab-panel active" id="panel-settings">
+    <div class="card">
+      <h3>API подключения</h3>
+      <div class="form-group">
+        <label>API ключ LavaTop</label>
+        <input type="password" id="lavaApiKey" placeholder="Вставьте API ключ LavaTop">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Аккаунт GetCourse (без .getcourse.ru)</label>
+          <input type="text" id="gcAccount" placeholder="myschool">
+        </div>
+        <div class="form-group">
+          <label>Секретный ключ GetCourse</label>
+          <input type="password" id="gcSecret" placeholder="Вставьте секрет GetCourse">
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+        <button class="btn btn-secondary" id="btnTest" onclick="testConnection()">Проверить подключение</button>
+      </div>
+      <div id="testResults" class="test-results" style="display: none;">
+        <div class="test-result pending" id="testLava">LavaTop: проверка...</div>
+        <div class="test-result pending" id="testGc">GetCourse: проверка...</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Синхронизация</h3>
+      <div class="toggle-wrap" style="margin-bottom: 16px;">
+        <label class="toggle">
+          <input type="checkbox" id="syncActive" onchange="toggleSync()">
+          <div class="slider"></div>
+        </label>
+        <span id="syncLabel">Автосинхронизация выключена</span>
+      </div>
+      <div class="form-group" style="max-width: 300px;">
+        <label>Интервал опроса (секунды, мин. 30)</label>
+        <input type="number" id="pollInterval" min="30" value="120">
+      </div>
+      <button class="btn btn-secondary" onclick="saveSettings()">Сохранить интервал</button>
+    </div>
+  </div>
+
+  <!-- ─── Mappings Tab ─── -->
+  <div class="tab-panel" id="panel-mappings">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 style="font-size: 18px;">Маппинг: продукт LavaTop → действие GetCourse</h3>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" id="btnLoadProducts" onclick="loadLavaProducts()">Загрузить продукты из LavaTop</button>
+        <button class="btn btn-primary" onclick="openMappingModal()">+ Добавить маппинг</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Продукт LavaTop</th>
+              <th>Offer ID</th>
+              <th>Действие</th>
+              <th>Группа GC</th>
+              <th>Код оффера GC</th>
+              <th>Название продукта GC</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="mappingsTable">
+            <tr><td colspan="8" class="empty-state">Нет маппингов. Нажмите "+ Добавить маппинг"</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Logs Tab ─── -->
+  <div class="tab-panel" id="panel-logs">
+    <div class="stats-row">
+      <div class="stat-card"><div class="value" id="statTotal">0</div><div class="label">Всего обработано</div></div>
+      <div class="stat-card success"><div class="value" id="statSuccess">0</div><div class="label">Успешно</div></div>
+      <div class="stat-card error"><div class="value" id="statErrors">0</div><div class="label">Ошибки</div></div>
+      <div class="stat-card"><div class="value" id="statLastSync">—</div><div class="label">Последняя синхр.</div></div>
+    </div>
+
+    <div class="filters">
+      <input type="date" id="filterDateFrom" onchange="loadLogs()">
+      <span style="color: #8b949e;">—</span>
+      <input type="date" id="filterDateTo" onchange="loadLogs()">
+      <select id="filterStatus" onchange="loadLogs()">
+        <option value="">Все статусы</option>
+        <option value="success">Успешно</option>
+        <option value="error">Ошибки</option>
+      </select>
+      <div style="margin-left: auto;">
+        <button class="btn btn-success" id="btnSync" onclick="manualSync()">Синхронизировать сейчас</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Email</th>
+              <th>Продукт</th>
+              <th>Сумма</th>
+              <th>GC User</th>
+              <th>GC Deal</th>
+              <th>Статус</th>
+              <th>Ошибка</th>
+            </tr>
+          </thead>
+          <tbody id="logsTable">
+            <tr><td colspan="8" class="empty-state">Нет записей</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="pagination" id="logsPagination"></div>
+  </div>
+</div>
+
+<!-- Mapping Modal -->
+<div class="modal-overlay" id="mappingModal">
+  <div class="modal">
+    <h3 id="mappingModalTitle">Добавить маппинг</h3>
+    <input type="hidden" id="mappingEditId">
+    <div class="form-group">
+      <label>Название продукта LavaTop</label>
+      <input type="text" id="mapProductName" placeholder="Точное или частичное название" list="lavaProductsList">
+      <datalist id="lavaProductsList"></datalist>
+    </div>
+    <div class="form-group">
+      <label>Offer ID (опционально)</label>
+      <input type="text" id="mapOfferId" placeholder="ID оффера в LavaTop">
+    </div>
+    <div class="form-group">
+      <label>Действие в GetCourse</label>
+      <select id="mapAction" onchange="updateMappingFields()">
+        <option value="both">Группа + Тренинг (заказ)</option>
+        <option value="group">Только группа</option>
+        <option value="deal">Только тренинг (заказ)</option>
+      </select>
+    </div>
+    <div id="groupFields">
+      <div class="form-group">
+        <label>Название группы в GetCourse</label>
+        <input type="text" id="mapGroupName" placeholder="Название группы">
+      </div>
+    </div>
+    <div id="dealFields">
+      <div class="form-group">
+        <label>Код оффера в GetCourse</label>
+        <input type="text" id="mapOfferCode" placeholder="Код оффера (offer_code)">
+      </div>
+      <div class="form-group">
+        <label>Название продукта в GetCourse</label>
+        <input type="text" id="mapProductTitle" placeholder="Название продукта (product_title)">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeMappingModal()">Отмена</button>
+      <button class="btn btn-primary" onclick="saveMapping()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ─── State ───
+let currentPage = 1;
+let lavaProducts = [];
+
+// ─── Toast ───
+function toast(msg, type = 'info', duration = 3000) {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), duration);
+}
+
+// ─── API Helper ───
+async function api(method, url, data) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (data) opts.body = JSON.stringify(data);
+  const res = await fetch(url, opts);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  return json;
+}
+
+// ─── Tabs ───
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById(`panel-${name}`).classList.add('active');
+  if (name === 'logs') { loadLogs(); loadStats(); }
+  if (name === 'mappings') loadMappings();
+}
+
+// ─── Settings ───
+async function loadSettings() {
+  try {
+    const s = await api('GET', '/api/settings');
+    document.getElementById('lavaApiKey').value = s.lava_api_key || '';
+    document.getElementById('gcAccount').value = s.gc_account || '';
+    document.getElementById('gcSecret').value = s.gc_secret || '';
+    document.getElementById('pollInterval').value = s.poll_interval || 120;
+    document.getElementById('syncActive').checked = !!s.is_active;
+    updateSyncLabel(!!s.is_active);
+    updateStatusDot(!!s.is_active);
+  } catch (e) {
+    toast('Ошибка загрузки настроек: ' + e.message, 'error');
+  }
+}
+
+function updateSyncLabel(active) {
+  document.getElementById('syncLabel').textContent = active ? 'Автосинхронизация включена' : 'Автосинхронизация выключена';
+}
+
+function updateStatusDot(active) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className = 'dot ' + (active ? 'active' : 'inactive');
+  text.textContent = active ? 'Синхронизация активна' : 'Синхронизация отключена';
+}
+
+async function saveSettings() {
+  try {
+    await api('POST', '/api/settings', {
+      lava_api_key: document.getElementById('lavaApiKey').value,
+      gc_account: document.getElementById('gcAccount').value,
+      gc_secret: document.getElementById('gcSecret').value,
+      poll_interval: parseInt(document.getElementById('pollInterval').value) || 120,
+      is_active: document.getElementById('syncActive').checked ? 1 : 0
+    });
+    toast('Настройки сохранены', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function toggleSync() {
+  const active = document.getElementById('syncActive').checked;
+  updateSyncLabel(active);
+  updateStatusDot(active);
+  await saveSettings();
+}
+
+async function testConnection() {
+  const container = document.getElementById('testResults');
+  const lavaEl = document.getElementById('testLava');
+  const gcEl = document.getElementById('testGc');
+  container.style.display = 'flex';
+  lavaEl.className = 'test-result pending'; lavaEl.textContent = 'LavaTop: проверка...';
+  gcEl.className = 'test-result pending'; gcEl.textContent = 'GetCourse: проверка...';
+
+  document.getElementById('btnTest').disabled = true;
+
+  // Save first to ensure keys are stored
+  await saveSettings();
+
+  try {
+    const r = await api('POST', '/api/settings/test');
+    if (r.lava) {
+      lavaEl.className = 'test-result ' + (r.lava.success ? 'ok' : 'fail');
+      lavaEl.textContent = r.lava.message;
+    }
+    if (r.gc) {
+      gcEl.className = 'test-result ' + (r.gc.success ? 'ok' : 'fail');
+      gcEl.textContent = r.gc.message;
+    }
+  } catch (e) {
+    lavaEl.className = 'test-result fail'; lavaEl.textContent = 'Ошибка: ' + e.message;
+    gcEl.className = 'test-result fail'; gcEl.textContent = 'Ошибка: ' + e.message;
+  }
+  document.getElementById('btnTest').disabled = false;
+}
+
+// ─── Mappings ───
+async function loadMappings() {
+  try {
+    const rows = await api('GET', '/api/mappings');
+    const tbody = document.getElementById('mappingsTable');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Нет маппингов. Нажмите "+ Добавить маппинг"</td></tr>';
+      return;
+    }
+    const actionLabels = { group: 'Группа', deal: 'Тренинг', both: 'Группа + Тренинг' };
+    tbody.innerHTML = rows.map(m => `
+      <tr>
+        <td>${esc(m.lava_product_name)}</td>
+        <td>${esc(m.lava_offer_id) || '—'}</td>
+        <td><span class="badge badge-info">${actionLabels[m.gc_action] || m.gc_action}</span></td>
+        <td>${esc(m.gc_group_name) || '—'}</td>
+        <td>${esc(m.gc_offer_code) || '—'}</td>
+        <td>${esc(m.gc_product_title) || '—'}</td>
+        <td>${m.is_active ? '<span class="badge badge-success">Вкл</span>' : '<span class="badge badge-error">Выкл</span>'}</td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="editMapping('${m.id}')">Ред.</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteMapping('${m.id}')">Уд.</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    toast('Ошибка загрузки маппингов: ' + e.message, 'error');
+  }
+}
+
+function openMappingModal(data) {
+  document.getElementById('mappingEditId').value = data?.id || '';
+  document.getElementById('mappingModalTitle').textContent = data ? 'Редактировать маппинг' : 'Добавить маппинг';
+  document.getElementById('mapProductName').value = data?.lava_product_name || '';
+  document.getElementById('mapOfferId').value = data?.lava_offer_id || '';
+  document.getElementById('mapAction').value = data?.gc_action || 'both';
+  document.getElementById('mapGroupName').value = data?.gc_group_name || '';
+  document.getElementById('mapOfferCode').value = data?.gc_offer_code || '';
+  document.getElementById('mapProductTitle').value = data?.gc_product_title || '';
+  updateMappingFields();
+  document.getElementById('mappingModal').classList.add('active');
+}
+
+function closeMappingModal() {
+  document.getElementById('mappingModal').classList.remove('active');
+}
+
+function updateMappingFields() {
+  const action = document.getElementById('mapAction').value;
+  document.getElementById('groupFields').style.display = (action === 'group' || action === 'both') ? 'block' : 'none';
+  document.getElementById('dealFields').style.display = (action === 'deal' || action === 'both') ? 'block' : 'none';
+}
+
+async function saveMapping() {
+  const id = document.getElementById('mappingEditId').value;
+  const data = {
+    lava_product_name: document.getElementById('mapProductName').value.trim(),
+    lava_offer_id: document.getElementById('mapOfferId').value.trim(),
+    gc_action: document.getElementById('mapAction').value,
+    gc_group_name: document.getElementById('mapGroupName').value.trim(),
+    gc_offer_code: document.getElementById('mapOfferCode').value.trim(),
+    gc_product_title: document.getElementById('mapProductTitle').value.trim()
+  };
+
+  if (!data.lava_product_name) { toast('Укажите название продукта', 'error'); return; }
+
+  try {
+    if (id) {
+      await api('PUT', `/api/mappings/${id}`, data);
+    } else {
+      await api('POST', '/api/mappings', data);
+    }
+    closeMappingModal();
+    loadMappings();
+    toast('Маппинг сохранён', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function editMapping(id) {
+  try {
+    const rows = await api('GET', '/api/mappings');
+    const m = rows.find(r => r.id === id);
+    if (m) openMappingModal(m);
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function deleteMapping(id) {
+  if (!confirm('Удалить маппинг?')) return;
+  try {
+    await api('DELETE', `/api/mappings/${id}`);
+    loadMappings();
+    toast('Маппинг удалён', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function loadLavaProducts() {
+  const btn = document.getElementById('btnLoadProducts');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Загрузка...';
+  try {
+    const data = await api('GET', '/api/lava/products');
+    const items = data.items || data || [];
+    lavaProducts = items;
+    const datalist = document.getElementById('lavaProductsList');
+    datalist.innerHTML = items.map(p => `<option value="${esc(p.name || p.title || '')}">`).join('');
+    toast(`Загружено продуктов: ${items.length}`, 'success');
+  } catch (e) {
+    toast('Ошибка загрузки продуктов: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Загрузить продукты из LavaTop';
+}
+
+// ─── Logs ───
+async function loadLogs() {
+  try {
+    const params = new URLSearchParams({ page: currentPage, limit: 50 });
+    const status = document.getElementById('filterStatus').value;
+    const from = document.getElementById('filterDateFrom').value;
+    const to = document.getElementById('filterDateTo').value;
+    if (status) params.set('status', status);
+    if (from) params.set('date_from', from);
+    if (to) params.set('date_to', to);
+
+    const data = await api('GET', `/api/logs?${params}`);
+    const tbody = document.getElementById('logsTable');
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Нет записей</td></tr>';
+      document.getElementById('logsPagination').innerHTML = '';
+      return;
+    }
+    tbody.innerHTML = data.items.map(l => `
+      <tr>
+        <td>${formatDate(l.processed_at)}</td>
+        <td>${esc(l.buyer_email)}</td>
+        <td>${esc(l.product_name)}</td>
+        <td>${l.amount ? l.amount + ' ' + (l.currency || '') : '—'}</td>
+        <td>${l.gc_user_id || '—'}</td>
+        <td>${l.gc_deal_id || '—'}</td>
+        <td><span class="badge badge-${l.gc_status === 'success' ? 'success' : 'error'}">${l.gc_status === 'success' ? 'OK' : 'Ошибка'}</span></td>
+        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${esc(l.gc_error || '')}">${esc(l.gc_error) || '—'}</td>
+      </tr>
+    `).join('');
+
+    // Pagination
+    const totalPages = Math.ceil(data.total / data.limit);
+    const pag = document.getElementById('logsPagination');
+    if (totalPages <= 1) { pag.innerHTML = ''; return; }
+    let html = '';
+    if (currentPage > 1) html += `<button class="btn btn-secondary btn-sm" onclick="goPage(${currentPage - 1})">←</button>`;
+    html += `<span style="color:#8b949e; font-size:13px;">Стр. ${currentPage} из ${totalPages}</span>`;
+    if (currentPage < totalPages) html += `<button class="btn btn-secondary btn-sm" onclick="goPage(${currentPage + 1})">→</button>`;
+    pag.innerHTML = html;
+  } catch (e) {
+    toast('Ошибка загрузки журнала: ' + e.message, 'error');
+  }
+}
+
+function goPage(p) { currentPage = p; loadLogs(); }
+
+async function loadStats() {
+  try {
+    const s = await api('GET', '/api/logs/stats');
+    document.getElementById('statTotal').textContent = s.total;
+    document.getElementById('statSuccess').textContent = s.success;
+    document.getElementById('statErrors').textContent = s.errors;
+    document.getElementById('statLastSync').textContent = s.last_sync_at ? formatDate(s.last_sync_at) : '—';
+  } catch (e) {
+    console.error('Stats error:', e);
+  }
+}
+
+async function manualSync() {
+  const btn = document.getElementById('btnSync');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Синхронизация...';
+  try {
+    const r = await api('POST', '/api/sync');
+    if (r.error) {
+      toast('Ошибка: ' + r.error, 'error');
+    } else if (r.skipped) {
+      toast(r.reason, 'info');
+    } else {
+      toast(`Обработано: ${r.processed}, ошибок: ${r.errors}, пропущено: ${r.skipped}`, r.errors ? 'error' : 'success');
+    }
+    loadLogs();
+    loadStats();
+  } catch (e) {
+    toast('Ошибка синхронизации: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Синхронизировать сейчас';
+}
+
+// ─── Helpers ───
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Init ───
+loadSettings();
+</script>
+</body>
+</html>
