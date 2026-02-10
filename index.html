@@ -205,16 +205,23 @@ tr:hover td { background: #1c2128; }
     <div class="card">
       <h3>Вебхук LavaTop</h3>
       <p style="color: #8b949e; font-size: 13px; margin-bottom: 12px;">
-        LavaTop API не отдаёт оплаты через встроенный чекаут (карты, PayPal, СБП). Для получения всех платежей настройте вебхук в личном кабинете LavaTop.
+        LavaTop API не отдаёт оплаты через чекаут. Вебхук получает <strong>все</strong> платежи в реальном времени.
       </p>
       <div class="form-group">
-        <label>URL вебхука (скопируйте в настройки LavaTop → Интеграции → Webhooks)</label>
+        <label>URL вебхука</label>
         <div style="display: flex; gap: 8px;">
           <input type="text" id="webhookUrl" readonly style="font-family: monospace; font-size: 13px;">
           <button class="btn btn-secondary" onclick="copyWebhookUrl()" style="white-space:nowrap;">Копировать</button>
         </div>
       </div>
-      <p style="color: #8b949e; font-size: 12px;">Событие: <strong>payment.success</strong>. При оплате LavaTop отправит данные → приложение обработает по правилам → создаст пользователя в GetCourse.</p>
+      <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-size: 12px; color: #8b949e; line-height: 1.6;">
+        <strong style="color: #e1e4e8;">Как настроить в LavaTop:</strong><br>
+        1. Интеграции → Public API → <strong>три точки (...)</strong> рядом с API ключом<br>
+        2. <strong>"Добавить Webhook"</strong><br>
+        3. Вставить URL выше<br>
+        4. Тип: <strong>Результат оплаты</strong> (для подписок — добавьте второй: "Регулярный платеж")<br>
+        5. Аутентификация: любой метод (Basic Auth или API Key)
+      </div>
     </div>
 
     <div class="card">

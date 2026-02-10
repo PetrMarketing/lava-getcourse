@@ -95,24 +95,24 @@ app.post('/api/webhook/lava', async (req, res) => {
   console.log('Webhook received:', JSON.stringify(payload).slice(0, 500));
 
   try {
-    // LavaTop sends: { type: "payment.success", payload: { ... } }
-    // or flat: { id, status, buyer: { email }, product: { ... }, amount, ... }
-    const eventType = payload.type || payload.event || '';
-    const data = payload.payload || payload.data || payload;
+    // LavaTop PurchaseWebhookLog format:
+    // { eventType, contractId, parentContractId, buyer: { email }, product: { id, title }, amount, currency, status, timestamp, clientUtm, errorMessage }
+    const eventType = payload.eventType || payload.type || payload.event || '';
 
     // Only process successful payments
-    if (eventType && !eventType.includes('success') && !eventType.includes('completed')) {
+    if (eventType && !eventType.toLowerCase().includes('success')) {
       console.log('Webhook skipped: event type', eventType);
       return;
     }
 
-    // Extract buyer email and product info
-    const buyerEmail = data.buyer?.email || data.email || data.buyerEmail || '';
-    const productName = data.product?.title || data.product?.name || data.productName || data.title || '';
-    const offerId = data.offer?.id || data.offerId || data.product?.offer?.id || '';
-    const invoiceId = data.id || data.invoiceId || data.contractId || uuidv4();
-    const amount = data.amount || data.receipt?.amount || data.sum || data.amountTotal?.amount || 0;
-    const currency = data.currency || data.receipt?.currency || data.amountTotal?.currency || '';
+    // Extract fields from PurchaseWebhookLog
+    const buyerEmail = payload.buyer?.email || '';
+    const productName = payload.product?.title || payload.product?.name || '';
+    const productId = payload.product?.id || '';
+    const offerId = productId;
+    const invoiceId = payload.contractId || payload.id || uuidv4();
+    const amount = payload.amount || 0;
+    const currency = payload.currency || '';
 
     if (!buyerEmail) {
       console.log('Webhook skipped: no buyer email');
