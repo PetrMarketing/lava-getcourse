@@ -51,6 +51,16 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS action_log (
+    id TEXT PRIMARY KEY,
+    action_type TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    details TEXT DEFAULT '',
+    status TEXT DEFAULT 'success',
+    error_message TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS sync_log (
     id TEXT PRIMARY KEY,
     lava_invoice_id TEXT UNIQUE,
@@ -74,6 +84,31 @@ if (!existingSettings) {
 
 app.use(express.json());
 app.use(express.static(__dirname));
+
+// ─── Action Log Helper ───
+function logAction(action_type, email, details, status = 'success', error_message = '') {
+  db.prepare(`INSERT INTO action_log (id, action_type, email, details, status, error_message) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(uuidv4(), action_type, email || '', typeof details === 'string' ? details : JSON.stringify(details), status, error_message);
+}
+
+// ─── Action Log API ───
+app.get('/api/action-log', (req, res) => {
+  const { page = 1, limit = 50, action_type, email } = req.query;
+  let where = [];
+  let params = [];
+  if (action_type) { where.push('action_type = ?'); params.push(action_type); }
+  if (email) { where.push('email LIKE ?'); params.push(`%${email}%`); }
+  const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const total = db.prepare(`SELECT COUNT(*) as cnt FROM action_log ${whereClause}`).get(...params).cnt;
+  const rows = db.prepare(`SELECT * FROM action_log ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, parseInt(limit), offset);
+  res.json({ items: rows, total, page: parseInt(page), limit: parseInt(limit) });
+});
+
+app.delete('/api/action-log/clear', (req, res) => {
+  db.prepare('DELETE FROM action_log').run();
+  res.json({ success: true });
+});
 
 // ─── Settings ───
 
@@ -544,16 +579,21 @@ async function syncPayments(manual = false) {
                     user: { email: buyerEmail },
                     system: { refresh_if_exists: 1 }
                   });
-                  if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
-                  else throw new Error(userRes.error_message || 'Ошибка авторизации пользователя');
+                  if (userRes.success) {
+                    gcUserId = String(userRes.result?.user_id || '');
+                    const isNew = userRes.result?.user_status === 'added';
+                    logAction(isNew ? 'user_created' : 'user_authorized', buyerEmail, { user_id: gcUserId, product: productName, rule: matchedRule.name });
+                  } else throw new Error(userRes.error_message || 'Ошибка авторизации пользователя');
 
                 } else if (action.type === 'add_to_group') {
                   const userRes = await gcApiCall(settings, 'users', {
                     user: { email: buyerEmail, group_name: [action.group_name] },
                     system: { refresh_if_exists: 1 }
                   });
-                  if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
-                  else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
+                  if (userRes.success) {
+                    gcUserId = String(userRes.result?.user_id || '');
+                    logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: action.group_name, product: productName, rule: matchedRule.name });
+                  } else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
 
                 } else if (action.type === 'grant_product') {
                   const dealParams = {
@@ -564,8 +604,10 @@ async function syncPayments(manual = false) {
                   if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
                   if (action.product_title) dealParams.deal.product_title = action.product_title;
                   const dealRes = await gcApiCall(settings, 'deals', dealParams);
-                  if (dealRes.success) gcDealId = String(dealRes.result?.deal_id || '');
-                  else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
+                  if (dealRes.success) {
+                    gcDealId = String(dealRes.result?.deal_id || '');
+                    logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: action.offer_code, product_title: action.product_title, product: productName, rule: matchedRule.name });
+                  } else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
                 }
               }
             } else {
@@ -574,21 +616,26 @@ async function syncPayments(manual = false) {
                 const userParams = { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } };
                 if (mapping.gc_group_name) userParams.user.group_name = [mapping.gc_group_name];
                 const userRes = await gcApiCall(settings, 'users', userParams);
-                if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
-                else throw new Error(userRes.error_message || 'Ошибка создания пользователя');
+                if (userRes.success) {
+                  gcUserId = String(userRes.result?.user_id || '');
+                  logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: mapping.gc_group_name || '', product: productName });
+                } else throw new Error(userRes.error_message || 'Ошибка создания пользователя');
               }
               if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
                 const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
                 if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
                 if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
                 const dealRes = await gcApiCall(settings, 'deals', dealParams);
-                if (dealRes.success) gcDealId = String(dealRes.result?.deal_id || '');
-                else throw new Error(dealRes.error_message || 'Ошибка создания заказа');
+                if (dealRes.success) {
+                  gcDealId = String(dealRes.result?.deal_id || '');
+                  logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: mapping.gc_offer_code, product: productName });
+                } else throw new Error(dealRes.error_message || 'Ошибка создания заказа');
               }
             }
           } catch (e) {
             gcStatus = 'error';
             gcError = e.message;
+            logAction('gc_error', buyerEmail, { product: productName, rule: matchedRule?.name || '' }, 'error', e.message);
           }
 
           db.prepare(`

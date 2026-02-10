@@ -169,6 +169,7 @@ tr:hover td { background: #1c2128; }
   <button class="tab-btn" onclick="switchTab('rules')">Правила</button>
   <button class="tab-btn" onclick="switchTab('mappings')">Маппинг продуктов</button>
   <button class="tab-btn" onclick="switchTab('logs')">Журнал</button>
+  <button class="tab-btn" onclick="switchTab('actions')">Журнал действий</button>
 </div>
 
 <div class="content">
@@ -316,6 +317,47 @@ tr:hover td { background: #1c2128; }
 
     <div class="pagination" id="logsPagination"></div>
   </div>
+
+  <!-- ─── Actions Tab ─── -->
+  <div class="tab-panel" id="panel-actions">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 style="font-size: 18px;">Журнал действий</h3>
+      <button class="btn btn-danger btn-sm" onclick="clearActionLog()">Очистить</button>
+    </div>
+
+    <div class="filters">
+      <input type="text" id="actionFilterEmail" placeholder="Поиск по email" onkeyup="if(event.key==='Enter')loadActionLog()">
+      <select id="actionFilterType" onchange="loadActionLog()">
+        <option value="">Все действия</option>
+        <option value="user_created">Создан пользователь</option>
+        <option value="user_authorized">Авторизован пользователь</option>
+        <option value="added_to_group">Добавлен в группу</option>
+        <option value="product_granted">Выдан продукт</option>
+        <option value="gc_error">Ошибка GC</option>
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="loadActionLog()">Найти</button>
+    </div>
+
+    <div class="card" style="padding: 0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Действие</th>
+              <th>Email</th>
+              <th>Детали</th>
+              <th>Статус</th>
+            </tr>
+          </thead>
+          <tbody id="actionLogTable">
+            <tr><td colspan="5" class="empty-state">Нет записей</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination" id="actionLogPagination"></div>
+  </div>
 </div>
 
 <!-- Mapping Modal -->
@@ -439,6 +481,7 @@ function switchTab(name) {
   if (name === 'logs') { loadLogs(); loadStats(); }
   if (name === 'mappings') loadMappings();
   if (name === 'rules') loadRules();
+  if (name === 'actions') loadActionLog();
 }
 
 // ─── Settings ───
@@ -1009,6 +1052,95 @@ function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Action Log ───
+let actionLogPage = 1;
+
+const actionTypeLabels = {
+  user_created: 'Создан пользователь',
+  user_authorized: 'Авторизован',
+  added_to_group: 'Добавлен в группу',
+  product_granted: 'Выдан продукт',
+  gc_error: 'Ошибка GC'
+};
+
+const actionTypeBadgeClass = {
+  user_created: 'badge-success',
+  user_authorized: 'badge-info',
+  added_to_group: 'badge-success',
+  product_granted: 'badge-info',
+  gc_error: 'badge-error'
+};
+
+async function loadActionLog() {
+  try {
+    const params = new URLSearchParams({ page: actionLogPage, limit: 50 });
+    const type = document.getElementById('actionFilterType').value;
+    const email = document.getElementById('actionFilterEmail').value.trim();
+    if (type) params.set('action_type', type);
+    if (email) params.set('email', email);
+
+    const data = await api('GET', `/api/action-log?${params}`);
+    const tbody = document.getElementById('actionLogTable');
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Нет записей</td></tr>';
+      document.getElementById('actionLogPagination').innerHTML = '';
+      return;
+    }
+
+    tbody.innerHTML = data.items.map(a => {
+      let details = '';
+      try {
+        const d = typeof a.details === 'string' ? JSON.parse(a.details) : a.details;
+        const parts = [];
+        if (d.product) parts.push(`Продукт: ${d.product}`);
+        if (d.group) parts.push(`Группа: ${d.group}`);
+        if (d.offer_code) parts.push(`Оффер: ${d.offer_code}`);
+        if (d.product_title) parts.push(`Продукт GC: ${d.product_title}`);
+        if (d.user_id) parts.push(`User ID: ${d.user_id}`);
+        if (d.deal_id) parts.push(`Deal ID: ${d.deal_id}`);
+        if (d.rule) parts.push(`Правило: ${d.rule}`);
+        details = parts.join(', ');
+      } catch (e) {
+        details = esc(a.details || '');
+      }
+      const badge = a.status === 'error'
+        ? `<span class="badge badge-error">Ошибка</span>`
+        : `<span class="badge ${actionTypeBadgeClass[a.action_type] || 'badge-info'}">${actionTypeLabels[a.action_type] || a.action_type}</span>`;
+      return `<tr>
+        <td>${formatDate(a.created_at)}</td>
+        <td>${badge}</td>
+        <td>${esc(a.email)}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(details + (a.error_message ? ' | ' + a.error_message : ''))}">${a.error_message ? '<span style="color:#f85149">' + esc(a.error_message) + '</span>' : esc(details)}</td>
+        <td><span class="badge ${a.status === 'error' ? 'badge-error' : 'badge-success'}">${a.status === 'error' ? 'Ошибка' : 'OK'}</span></td>
+      </tr>`;
+    }).join('');
+
+    const totalPages = Math.ceil(data.total / data.limit);
+    const pag = document.getElementById('actionLogPagination');
+    if (totalPages <= 1) { pag.innerHTML = ''; return; }
+    let html = '';
+    if (actionLogPage > 1) html += `<button class="btn btn-secondary btn-sm" onclick="goActionPage(${actionLogPage - 1})">←</button>`;
+    html += `<span style="color:#8b949e;font-size:13px;">Стр. ${actionLogPage} из ${totalPages}</span>`;
+    if (actionLogPage < totalPages) html += `<button class="btn btn-secondary btn-sm" onclick="goActionPage(${actionLogPage + 1})">→</button>`;
+    pag.innerHTML = html;
+  } catch (e) {
+    toast('Ошибка загрузки журнала действий: ' + e.message, 'error');
+  }
+}
+
+function goActionPage(p) { actionLogPage = p; loadActionLog(); }
+
+async function clearActionLog() {
+  if (!confirm('Очистить журнал действий?')) return;
+  try {
+    await api('DELETE', '/api/action-log/clear');
+    loadActionLog();
+    toast('Журнал действий очищен', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
 }
 
 // ─── Init ───
