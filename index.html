@@ -118,10 +118,37 @@ tr:hover td { background: #1c2128; }
 .test-result.fail { background: rgba(248,81,73,0.15); border: 1px solid rgba(248,81,73,0.3); color: #f85149; }
 .test-result.pending { background: rgba(139,148,158,0.1); border: 1px solid #30363d; color: #8b949e; }
 
+/* Rule cards */
+.rule-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.rule-card.inactive { opacity: 0.5; }
+.rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.rule-name { font-size: 15px; font-weight: 600; }
+.rule-condition { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: #8b949e; }
+.rule-condition .cond-label { color: #f0883e; font-weight: 500; }
+.rule-condition .cond-value { color: #e1e4e8; background: #0d1117; padding: 2px 8px; border-radius: 4px; }
+.rule-actions-list { display: flex; flex-direction: column; gap: 6px; }
+.rule-action-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #0d1117; border-radius: 6px; font-size: 13px; }
+.rule-action-item .action-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+.rule-action-item .action-icon.authorize { background: rgba(31,111,235,0.2); color: #58a6ff; }
+.rule-action-item .action-icon.group { background: rgba(56,139,66,0.2); color: #3fb950; }
+.rule-action-item .action-icon.product { background: rgba(124,93,250,0.2); color: #a78bfa; }
+.rule-action-item .action-detail { color: #8b949e; }
+.rule-action-item .action-detail strong { color: #e1e4e8; }
+
+/* Action builder in modal */
+.action-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; padding: 10px; background: #0d1117; border-radius: 6px; border: 1px solid #21262d; }
+.action-row select, .action-row input { padding: 6px 8px; background: #161b22; border: 1px solid #30363d; border-radius: 4px; color: #e1e4e8; font-size: 13px; }
+.action-row select { min-width: 170px; }
+.action-row input { flex: 1; min-width: 0; }
+.action-row .btn-remove { padding: 4px 8px; font-size: 16px; line-height: 1; color: #f85149; background: none; border: none; cursor: pointer; flex-shrink: 0; }
+.action-row .btn-remove:hover { background: rgba(248,81,73,0.15); border-radius: 4px; }
+.action-params { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+
 /* Responsive */
 @media (max-width: 768px) {
   .form-row { grid-template-columns: 1fr; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .action-row { flex-direction: column; }
 }
 </style>
 </head>
@@ -137,6 +164,7 @@ tr:hover td { background: #1c2128; }
 
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('settings')">Настройки</button>
+  <button class="tab-btn" onclick="switchTab('rules')">Правила</button>
   <button class="tab-btn" onclick="switchTab('mappings')">Маппинг продуктов</button>
   <button class="tab-btn" onclick="switchTab('logs')">Журнал</button>
 </div>
@@ -185,6 +213,20 @@ tr:hover td { background: #1c2128; }
         <input type="number" id="pollInterval" min="30" value="120">
       </div>
       <button class="btn btn-secondary" onclick="saveSettings()">Сохранить интервал</button>
+    </div>
+  </div>
+
+  <!-- ─── Rules Tab ─── -->
+  <div class="tab-panel" id="panel-rules">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div>
+        <h3 style="font-size: 18px;">Правила обработки платежей</h3>
+        <p style="color: #8b949e; font-size: 13px; margin-top: 4px;">Если условие совпадает — выполняются все действия правила</p>
+      </div>
+      <button class="btn btn-primary" onclick="openRuleModal()">+ Добавить правило</button>
+    </div>
+    <div id="rulesList">
+      <div class="empty-state">Нет правил. Нажмите "+ Добавить правило"</div>
     </div>
   </div>
 
@@ -315,6 +357,42 @@ tr:hover td { background: #1c2128; }
   </div>
 </div>
 
+<!-- Rule Modal -->
+<div class="modal-overlay" id="ruleModal">
+  <div class="modal" style="width: 580px;">
+    <h3 id="ruleModalTitle">Добавить правило</h3>
+    <input type="hidden" id="ruleEditId">
+    <div class="form-group">
+      <label>Название правила</label>
+      <input type="text" id="ruleName" placeholder="Например: Покупка консультации">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Условие</label>
+        <select id="ruleConditionType">
+          <option value="product_equals">Продукт равен</option>
+          <option value="product_contains">Продукт содержит</option>
+          <option value="email_contains">Email содержит</option>
+          <option value="amount_gte">Сумма >=</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Значение</label>
+        <input type="text" id="ruleConditionValue" placeholder="Название продукта" list="lavaProductsList">
+      </div>
+    </div>
+    <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+      <label style="font-size: 13px; color: #8b949e;">Действия (выполняются по порядку)</label>
+      <button class="btn btn-secondary btn-sm" onclick="addRuleAction()">+ Действие</button>
+    </div>
+    <div id="ruleActionsContainer"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeRuleModal()">Отмена</button>
+      <button class="btn btn-primary" onclick="saveRule()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -350,6 +428,7 @@ function switchTab(name) {
   document.getElementById(`panel-${name}`).classList.add('active');
   if (name === 'logs') { loadLogs(); loadStats(); }
   if (name === 'mappings') loadMappings();
+  if (name === 'rules') loadRules();
 }
 
 // ─── Settings ───
@@ -629,6 +708,179 @@ async function manualSync() {
   }
   btn.disabled = false;
   btn.textContent = 'Синхронизировать сейчас';
+}
+
+// ─── Rules ───
+const conditionLabels = { product_equals: 'Продукт =', product_contains: 'Продукт содержит', email_contains: 'Email содержит', amount_gte: 'Сумма >=' };
+const actionLabelsMap = { authorize: 'Авторизовать', add_to_group: 'Добавить в группу', grant_product: 'Выдать продукт' };
+const actionIcons = { authorize: '&#128100;', add_to_group: '&#128101;', grant_product: '&#127891;' };
+const actionIconClass = { authorize: 'authorize', add_to_group: 'group', grant_product: 'product' };
+
+async function loadRules() {
+  try {
+    const rules = await api('GET', '/api/rules');
+    const container = document.getElementById('rulesList');
+    if (!rules.length) {
+      container.innerHTML = '<div class="empty-state">Нет правил. Нажмите "+ Добавить правило"</div>';
+      return;
+    }
+    container.innerHTML = rules.map(r => {
+      const actionsHtml = r.actions.map(a => {
+        let detail = actionLabelsMap[a.type] || a.type;
+        if (a.type === 'add_to_group') detail += `: <strong>${esc(a.group_name)}</strong>`;
+        if (a.type === 'grant_product') detail += `: <strong>${esc(a.product_title || a.offer_code || '')}</strong>`;
+        return `<div class="rule-action-item">
+          <div class="action-icon ${actionIconClass[a.type] || ''}">${actionIcons[a.type] || '?'}</div>
+          <div class="action-detail">${detail}</div>
+        </div>`;
+      }).join('');
+
+      return `<div class="rule-card ${r.is_active ? '' : 'inactive'}">
+        <div class="rule-header">
+          <div>
+            <span class="rule-name">${esc(r.name) || 'Без названия'}</span>
+            ${r.is_active ? '<span class="badge badge-success" style="margin-left:8px">Вкл</span>' : '<span class="badge badge-error" style="margin-left:8px">Выкл</span>'}
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-secondary btn-sm" onclick="toggleRule('${r.id}', ${r.is_active ? 0 : 1})">${r.is_active ? 'Выкл' : 'Вкл'}</button>
+            <button class="btn btn-secondary btn-sm" onclick="editRule('${r.id}')">Ред.</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteRule('${r.id}')">Уд.</button>
+          </div>
+        </div>
+        <div class="rule-condition">
+          <span class="cond-label">${conditionLabels[r.condition_type] || r.condition_type}</span>
+          <span class="cond-value">${esc(r.condition_value)}</span>
+        </div>
+        <div class="rule-actions-list">${actionsHtml || '<div style="color:#8b949e;font-size:13px;">Нет действий</div>'}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    toast('Ошибка загрузки правил: ' + e.message, 'error');
+  }
+}
+
+function openRuleModal(data) {
+  document.getElementById('ruleEditId').value = data?.id || '';
+  document.getElementById('ruleModalTitle').textContent = data ? 'Редактировать правило' : 'Добавить правило';
+  document.getElementById('ruleName').value = data?.name || '';
+  document.getElementById('ruleConditionType').value = data?.condition_type || 'product_equals';
+  document.getElementById('ruleConditionValue').value = data?.condition_value || '';
+  const container = document.getElementById('ruleActionsContainer');
+  container.innerHTML = '';
+  if (data?.actions?.length) {
+    data.actions.forEach(a => addRuleAction(a));
+  } else {
+    addRuleAction({ type: 'authorize' });
+  }
+  document.getElementById('ruleModal').classList.add('active');
+}
+
+function closeRuleModal() {
+  document.getElementById('ruleModal').classList.remove('active');
+}
+
+function addRuleAction(data) {
+  const container = document.getElementById('ruleActionsContainer');
+  const idx = container.children.length;
+  const div = document.createElement('div');
+  div.className = 'action-row';
+  div.innerHTML = `
+    <select onchange="onActionTypeChange(this)">
+      <option value="authorize" ${data?.type === 'authorize' ? 'selected' : ''}>Авторизовать в GC</option>
+      <option value="add_to_group" ${data?.type === 'add_to_group' ? 'selected' : ''}>Добавить в группу</option>
+      <option value="grant_product" ${data?.type === 'grant_product' ? 'selected' : ''}>Выдать доступ к продукту</option>
+    </select>
+    <div class="action-params"></div>
+    <button class="btn-remove" onclick="this.parentElement.remove()" title="Удалить">&times;</button>
+  `;
+  container.appendChild(div);
+  renderActionParams(div, data?.type || 'authorize', data);
+}
+
+function onActionTypeChange(sel) {
+  const row = sel.closest('.action-row');
+  renderActionParams(row, sel.value, {});
+}
+
+function renderActionParams(row, type, data) {
+  const params = row.querySelector('.action-params');
+  if (type === 'authorize') {
+    params.innerHTML = '<span style="color:#8b949e;font-size:12px;">Создаёт/обновляет пользователя в GetCourse</span>';
+  } else if (type === 'add_to_group') {
+    params.innerHTML = `<input type="text" placeholder="Название группы" value="${esc(data?.group_name || '')}" data-field="group_name">`;
+  } else if (type === 'grant_product') {
+    params.innerHTML = `
+      <input type="text" placeholder="Код оффера (offer_code)" value="${esc(data?.offer_code || '')}" data-field="offer_code">
+      <input type="text" placeholder="Название продукта (product_title)" value="${esc(data?.product_title || '')}" data-field="product_title" style="margin-top:4px;">
+    `;
+  }
+}
+
+function collectRuleActions() {
+  const rows = document.querySelectorAll('#ruleActionsContainer .action-row');
+  return Array.from(rows).map(row => {
+    const type = row.querySelector('select').value;
+    const action = { type };
+    row.querySelectorAll('input[data-field]').forEach(inp => {
+      if (inp.value.trim()) action[inp.dataset.field] = inp.value.trim();
+    });
+    return action;
+  });
+}
+
+async function saveRule() {
+  const id = document.getElementById('ruleEditId').value;
+  const data = {
+    name: document.getElementById('ruleName').value.trim(),
+    condition_type: document.getElementById('ruleConditionType').value,
+    condition_value: document.getElementById('ruleConditionValue').value.trim(),
+    actions: collectRuleActions()
+  };
+  if (!data.condition_value) { toast('Укажите значение условия', 'error'); return; }
+  if (!data.actions.length) { toast('Добавьте хотя бы одно действие', 'error'); return; }
+
+  try {
+    if (id) {
+      await api('PUT', `/api/rules/${id}`, data);
+    } else {
+      await api('POST', '/api/rules', data);
+    }
+    closeRuleModal();
+    loadRules();
+    toast('Правило сохранено', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function editRule(id) {
+  try {
+    const rules = await api('GET', '/api/rules');
+    const r = rules.find(x => x.id === id);
+    if (r) openRuleModal(r);
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function toggleRule(id, active) {
+  try {
+    await api('PUT', `/api/rules/${id}`, { is_active: active });
+    loadRules();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function deleteRule(id) {
+  if (!confirm('Удалить правило?')) return;
+  try {
+    await api('DELETE', `/api/rules/${id}`);
+    loadRules();
+    toast('Правило удалено', 'success');
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
 }
 
 // ─── Helpers ───

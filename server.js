@@ -41,6 +41,16 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS rules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    condition_type TEXT NOT NULL DEFAULT 'product_equals',
+    condition_value TEXT NOT NULL DEFAULT '',
+    actions TEXT NOT NULL DEFAULT '[]',
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS sync_log (
     id TEXT PRIMARY KEY,
     lava_invoice_id TEXT UNIQUE,
@@ -189,6 +199,48 @@ app.delete('/api/mappings/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Rules ───
+
+app.get('/api/rules', (req, res) => {
+  const rows = db.prepare('SELECT * FROM rules ORDER BY created_at DESC').all();
+  res.json(rows.map(r => ({ ...r, actions: JSON.parse(r.actions || '[]') })));
+});
+
+app.post('/api/rules', (req, res) => {
+  const { name, condition_type, condition_value, actions } = req.body;
+  if (!condition_value) return res.status(400).json({ error: 'Условие обязательно' });
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO rules (id, name, condition_type, condition_value, actions)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, name || '', condition_type || 'product_equals', condition_value, JSON.stringify(actions || []));
+  const row = db.prepare('SELECT * FROM rules WHERE id = ?').get(id);
+  res.json({ ...row, actions: JSON.parse(row.actions) });
+});
+
+app.put('/api/rules/:id', (req, res) => {
+  const { name, condition_type, condition_value, actions, is_active } = req.body;
+  const existing = db.prepare('SELECT * FROM rules WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Правило не найдено' });
+  db.prepare(`
+    UPDATE rules SET
+      name = COALESCE(?, name),
+      condition_type = COALESCE(?, condition_type),
+      condition_value = COALESCE(?, condition_value),
+      actions = COALESCE(?, actions),
+      is_active = COALESCE(?, is_active)
+    WHERE id = ?
+  `).run(name, condition_type, condition_value, actions ? JSON.stringify(actions) : null, is_active, req.params.id);
+  const row = db.prepare('SELECT * FROM rules WHERE id = ?').get(req.params.id);
+  res.json({ ...row, actions: JSON.parse(row.actions) });
+});
+
+app.delete('/api/rules/:id', (req, res) => {
+  const result = db.prepare('DELETE FROM rules WHERE id = ?').run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Правило не найдено' });
+  res.json({ success: true });
+});
+
 // ─── Logs ───
 
 app.get('/api/logs', (req, res) => {
@@ -269,6 +321,7 @@ async function syncPayments(manual = false) {
 
   const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
   const mappings = db.prepare('SELECT * FROM mappings WHERE is_active = 1').all();
+  const rules = db.prepare('SELECT * FROM rules WHERE is_active = 1').all().map(r => ({ ...r, actions: JSON.parse(r.actions || '[]') }));
 
   try {
     // Step 1: Get product list from sales overview (includes deleted products)
@@ -319,17 +372,26 @@ async function syncPayments(manual = false) {
             continue;
           }
 
-          // Find mapping by product name or product/offer id
-          const mapping = mappings.find(m =>
+          // Find matching rule first, then fall back to mapping
+          const matchedRule = rules.find(r => {
+            const val = r.condition_value.toLowerCase();
+            if (r.condition_type === 'product_equals') return productName.toLowerCase() === val;
+            if (r.condition_type === 'product_contains') return productName.toLowerCase().includes(val);
+            if (r.condition_type === 'email_contains') return buyerEmail.toLowerCase().includes(val);
+            if (r.condition_type === 'amount_gte') return amount >= parseFloat(r.condition_value);
+            return false;
+          });
+
+          const mapping = !matchedRule ? mappings.find(m =>
             (m.lava_product_name && productName.toLowerCase().includes(m.lava_product_name.toLowerCase())) ||
             (m.lava_offer_id && (m.lava_offer_id === productId || m.lava_offer_id === sale.id))
-          );
+          ) : null;
 
-          if (!mapping) {
+          if (!matchedRule && !mapping) {
             db.prepare(`
               INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
               VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?)
-            `).run(uuidv4(), saleUniqueId, buyerEmail, productName, amount, currency, 'Маппинг не найден для продукта', sale.created || new Date().toISOString());
+            `).run(uuidv4(), saleUniqueId, buyerEmail, productName, amount, currency, 'Правило/маппинг не найдены для продукта', sale.created || new Date().toISOString());
             errors++;
             continue;
           }
@@ -341,37 +403,54 @@ async function syncPayments(manual = false) {
           let gcStatus = 'success';
 
           try {
-            // Create user (+ add to group if needed)
-            if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
-              const userParams = {
-                user: { email: buyerEmail },
-                system: { refresh_if_exists: 1 }
-              };
-              if (mapping.gc_group_name) {
-                userParams.user.group_name = [mapping.gc_group_name];
-              }
-              const userRes = await gcApiCall(settings, 'users', userParams);
-              if (userRes.success) {
-                gcUserId = String(userRes.result?.user_id || '');
-              } else {
-                throw new Error(userRes.error_message || 'Ошибка создания пользователя в GetCourse');
-              }
-            }
+            if (matchedRule) {
+              // Execute rule actions sequentially
+              for (const action of matchedRule.actions) {
+                if (action.type === 'authorize') {
+                  const userRes = await gcApiCall(settings, 'users', {
+                    user: { email: buyerEmail },
+                    system: { refresh_if_exists: 1 }
+                  });
+                  if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
+                  else throw new Error(userRes.error_message || 'Ошибка авторизации пользователя');
 
-            // Create deal (training access) if needed
-            if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
-              const dealParams = {
-                user: { email: buyerEmail },
-                deal: { deal_cost: amount, deal_is_paid: 'yes' },
-                system: { refresh_if_exists: 1 }
-              };
-              if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
-              if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
-              const dealRes = await gcApiCall(settings, 'deals', dealParams);
-              if (dealRes.success) {
-                gcDealId = String(dealRes.result?.deal_id || '');
-              } else {
-                throw new Error(dealRes.error_message || 'Ошибка создания заказа в GetCourse');
+                } else if (action.type === 'add_to_group') {
+                  const userRes = await gcApiCall(settings, 'users', {
+                    user: { email: buyerEmail, group_name: [action.group_name] },
+                    system: { refresh_if_exists: 1 }
+                  });
+                  if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
+                  else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
+
+                } else if (action.type === 'grant_product') {
+                  const dealParams = {
+                    user: { email: buyerEmail },
+                    deal: { deal_cost: amount, deal_is_paid: 'yes' },
+                    system: { refresh_if_exists: 1 }
+                  };
+                  if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
+                  if (action.product_title) dealParams.deal.product_title = action.product_title;
+                  const dealRes = await gcApiCall(settings, 'deals', dealParams);
+                  if (dealRes.success) gcDealId = String(dealRes.result?.deal_id || '');
+                  else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
+                }
+              }
+            } else {
+              // Legacy mapping logic
+              if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
+                const userParams = { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } };
+                if (mapping.gc_group_name) userParams.user.group_name = [mapping.gc_group_name];
+                const userRes = await gcApiCall(settings, 'users', userParams);
+                if (userRes.success) gcUserId = String(userRes.result?.user_id || '');
+                else throw new Error(userRes.error_message || 'Ошибка создания пользователя');
+              }
+              if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
+                const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
+                if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
+                if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
+                const dealRes = await gcApiCall(settings, 'deals', dealParams);
+                if (dealRes.success) gcDealId = String(dealRes.result?.deal_id || '');
+                else throw new Error(dealRes.error_message || 'Ошибка создания заказа');
               }
             }
           } catch (e) {
