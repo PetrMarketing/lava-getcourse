@@ -76,10 +76,18 @@ db.exec(`
   );
 `);
 
-// Ensure default settings row
+// Add webhook_secret column if missing
+try { db.exec("ALTER TABLE settings ADD COLUMN webhook_secret TEXT DEFAULT ''"); } catch (e) {}
+
+// Ensure default settings row with webhook secret
 const existingSettings = db.prepare('SELECT id FROM settings WHERE id = ?').get('main');
 if (!existingSettings) {
-  db.prepare('INSERT INTO settings (id) VALUES (?)').run('main');
+  db.prepare('INSERT INTO settings (id, webhook_secret) VALUES (?, ?)').run('main', uuidv4());
+} else {
+  const s = db.prepare('SELECT webhook_secret FROM settings WHERE id = ?').get('main');
+  if (!s.webhook_secret) {
+    db.prepare("UPDATE settings SET webhook_secret = ? WHERE id = 'main'").run(uuidv4());
+  }
 }
 
 app.use(express.json());
@@ -88,6 +96,14 @@ app.use(express.static(__dirname));
 // ─── LavaTop Webhook ───
 
 app.post('/api/webhook/lava', async (req, res) => {
+  // Verify API key
+  const incomingKey = req.headers['x-api-key'] || '';
+  const settings = db.prepare('SELECT webhook_secret FROM settings WHERE id = ?').get('main');
+  if (settings?.webhook_secret && incomingKey !== settings.webhook_secret) {
+    console.log('Webhook rejected: invalid API key');
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+
   // Respond 200 immediately so LavaTop doesn't retry
   res.json({ ok: true });
 
