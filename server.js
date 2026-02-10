@@ -8,8 +8,8 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3002;
 
-// Ensure data directory exists
-const dataDir = path.join(__dirname, 'data');
+// Data directory: /var/data on Render (persistent disk), local ./data otherwise
+const dataDir = fs.existsSync('/var/data') ? '/var/data' : path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 // Database setup

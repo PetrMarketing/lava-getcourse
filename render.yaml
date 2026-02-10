@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: lava-getcourse
+    runtime: node
+    nodeVersion: 20.11.0
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: lava-data
+      mountPath: /var/data
+      sizeGB: 1
