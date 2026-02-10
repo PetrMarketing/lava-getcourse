@@ -346,6 +346,69 @@ app.get('/api/lava/all-products', async (req, res) => {
   }
 });
 
+// ─── Restore (import all LavaTop sales without GC processing) ───
+
+app.post('/api/sync/restore', async (req, res) => {
+  const settings = db.prepare('SELECT * FROM settings WHERE id = ?').get('main');
+  if (!settings?.lava_api_key) return res.status(400).json({ error: 'API ключ LavaTop не настроен' });
+
+  const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
+  let imported = 0;
+  let skipped = 0;
+
+  try {
+    // Clear existing log
+    db.prepare('DELETE FROM sync_log').run();
+    db.prepare("UPDATE settings SET last_sync_at = '' WHERE id = 'main'").run();
+
+    // Get all products from sales overview
+    const salesOverviewRes = await fetch('https://gate.lava.top/api/v1/sales/?page=1&size=100', { headers });
+    if (!salesOverviewRes.ok) throw new Error(`LavaTop sales error: ${salesOverviewRes.status}`);
+    const salesOverview = await salesOverviewRes.json();
+    const products = (salesOverview.items || []).map(s => ({ id: s.productId, title: s.title }));
+
+    // For each product, fetch all sales
+    for (const product of products) {
+      let page = 1;
+      let totalPages = 1;
+
+      while (page <= totalPages) {
+        const salesRes = await fetch(`https://gate.lava.top/api/v1/sales/${product.id}?page=${page}&size=50`, { headers });
+        if (!salesRes.ok) { page++; continue; }
+
+        const salesData = await salesRes.json();
+        totalPages = salesData.totalPages || 1;
+
+        for (const sale of (salesData.items || [])) {
+          const saleUniqueId = `${sale.id}_${sale.created}`;
+          const buyerEmail = sale.buyer?.email || '';
+          const productName = sale.product?.name || product.title || '';
+          const amount = sale.amountTotal?.amount || 0;
+          const currency = sale.amountTotal?.currency || '';
+          const status = sale.status || 'unknown';
+
+          try {
+            db.prepare(`
+              INSERT OR IGNORE INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              uuidv4(), saleUniqueId, buyerEmail, productName, amount, currency,
+              status === 'completed' ? 'imported' : status,
+              '', sale.created || new Date().toISOString()
+            );
+            imported++;
+          } catch (e) { skipped++; }
+        }
+        page++;
+      }
+    }
+
+    res.json({ imported, skipped });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Manual Sync ───
 
 app.post('/api/sync', async (req, res) => {

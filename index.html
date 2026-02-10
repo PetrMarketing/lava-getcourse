@@ -73,6 +73,8 @@ tr:hover td { background: #1c2128; }
 .badge-success { background: rgba(56,139,66,0.2); color: #3fb950; }
 .badge-error { background: rgba(248,81,73,0.2); color: #f85149; }
 .badge-info { background: rgba(124,93,250,0.2); color: #a78bfa; }
+.badge-imported { background: rgba(31,111,235,0.2); color: #58a6ff; }
+.badge-failed { background: rgba(139,148,158,0.2); color: #8b949e; }
 
 /* Stats */
 .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
@@ -280,9 +282,12 @@ tr:hover td { background: #1c2128; }
         <option value="">Все статусы</option>
         <option value="success">Успешно</option>
         <option value="error">Ошибки</option>
+        <option value="imported">Импортировано</option>
+        <option value="failed">Не оплачено</option>
       </select>
       <div style="margin-left: auto; display: flex; gap: 8px;">
-        <button class="btn btn-danger btn-sm" onclick="clearLogs()">Очистить журнал</button>
+        <button class="btn btn-danger btn-sm" onclick="clearLogs()">Очистить</button>
+        <button class="btn btn-secondary" id="btnRestore" onclick="restoreLogs()">Восстановить журнал</button>
         <button class="btn btn-success" id="btnSync" onclick="manualSync()">Синхронизировать сейчас</button>
       </div>
     </div>
@@ -660,7 +665,7 @@ async function loadLogs() {
         <td>${l.amount ? l.amount + ' ' + (l.currency || '') : '—'}</td>
         <td>${l.gc_user_id || '—'}</td>
         <td>${l.gc_deal_id || '—'}</td>
-        <td><span class="badge badge-${l.gc_status === 'success' ? 'success' : 'error'}">${l.gc_status === 'success' ? 'OK' : 'Ошибка'}</span></td>
+        <td>${statusBadge(l.gc_status)}</td>
         <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${esc(l.gc_error || '')}">${esc(l.gc_error) || '—'}</td>
       </tr>
     `).join('');
@@ -964,6 +969,32 @@ async function clearLogs() {
   } catch (e) {
     toast('Ошибка: ' + e.message, 'error');
   }
+}
+
+async function restoreLogs() {
+  if (!confirm('Очистить журнал и загрузить все покупки из LavaTop?')) return;
+  const btn = document.getElementById('btnRestore');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Загрузка...';
+  try {
+    const r = await api('POST', '/api/sync/restore');
+    toast(`Импортировано: ${r.imported}, пропущено: ${r.skipped}`, 'success');
+    loadLogs();
+    loadStats();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Восстановить журнал';
+}
+
+function statusBadge(s) {
+  if (s === 'success') return '<span class="badge badge-success">OK</span>';
+  if (s === 'imported') return '<span class="badge badge-imported">Импорт</span>';
+  if (s === 'completed') return '<span class="badge badge-imported">Оплачен</span>';
+  if (s === 'failed') return '<span class="badge badge-failed">Не оплачен</span>';
+  if (s === 'error') return '<span class="badge badge-error">Ошибка</span>';
+  return `<span class="badge badge-failed">${s || '?'}</span>`;
 }
 
 // ─── Helpers ───
