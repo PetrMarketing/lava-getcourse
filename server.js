@@ -85,6 +85,168 @@ if (!existingSettings) {
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// ─── LavaTop Webhook ───
+
+app.post('/api/webhook/lava', async (req, res) => {
+  // Respond 200 immediately so LavaTop doesn't retry
+  res.json({ ok: true });
+
+  const payload = req.body;
+  console.log('Webhook received:', JSON.stringify(payload).slice(0, 500));
+
+  try {
+    // LavaTop sends: { type: "payment.success", payload: { ... } }
+    // or flat: { id, status, buyer: { email }, product: { ... }, amount, ... }
+    const eventType = payload.type || payload.event || '';
+    const data = payload.payload || payload.data || payload;
+
+    // Only process successful payments
+    if (eventType && !eventType.includes('success') && !eventType.includes('completed')) {
+      console.log('Webhook skipped: event type', eventType);
+      return;
+    }
+
+    // Extract buyer email and product info
+    const buyerEmail = data.buyer?.email || data.email || data.buyerEmail || '';
+    const productName = data.product?.title || data.product?.name || data.productName || data.title || '';
+    const offerId = data.offer?.id || data.offerId || data.product?.offer?.id || '';
+    const invoiceId = data.id || data.invoiceId || data.contractId || uuidv4();
+    const amount = data.amount || data.receipt?.amount || data.sum || data.amountTotal?.amount || 0;
+    const currency = data.currency || data.receipt?.currency || data.amountTotal?.currency || '';
+
+    if (!buyerEmail) {
+      console.log('Webhook skipped: no buyer email');
+      logAction('webhook_received', '', { invoiceId, productName, error: 'no email' }, 'error', 'Email покупателя отсутствует');
+      return;
+    }
+
+    // Check if already processed
+    const existing = db.prepare('SELECT id FROM sync_log WHERE lava_invoice_id = ?').get(invoiceId);
+    if (existing) {
+      console.log('Webhook skipped: already processed', invoiceId);
+      return;
+    }
+
+    logAction('webhook_received', buyerEmail, { invoiceId, productName, amount, currency });
+
+    // Find matching rule
+    const settings = db.prepare('SELECT * FROM settings WHERE id = ?').get('main');
+    if (!settings?.gc_secret || !settings?.gc_account) {
+      console.log('Webhook skipped: GC not configured');
+      db.prepare(`INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?)`)
+        .run(uuidv4(), invoiceId, buyerEmail, productName, amount, currency, 'GetCourse не настроен', new Date().toISOString());
+      return;
+    }
+
+    const rules = db.prepare('SELECT * FROM rules WHERE is_active = 1').all().map(r => ({ ...r, actions: JSON.parse(r.actions || '[]') }));
+    const mappings = db.prepare('SELECT * FROM mappings WHERE is_active = 1').all();
+
+    // Check user existence in GC if needed
+    let gcUserStatus = null;
+    const needsGcCheck = rules.some(r => r.condition_type === 'user_exists_gc' || r.condition_type === 'user_not_exists_gc');
+    if (needsGcCheck) {
+      try {
+        const checkRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
+        gcUserStatus = checkRes.success ? (checkRes.result?.user_status || 'updated') : null;
+      } catch (e) { gcUserStatus = null; }
+    }
+
+    const matchedRule = rules.find(r => {
+      const val = (r.condition_value || '').toLowerCase();
+      if (r.condition_type === 'product_equals') return productName.toLowerCase() === val;
+      if (r.condition_type === 'product_contains') return productName.toLowerCase().includes(val);
+      if (r.condition_type === 'email_contains') return buyerEmail.toLowerCase().includes(val);
+      if (r.condition_type === 'email_equals') return buyerEmail.toLowerCase() === val;
+      if (r.condition_type === 'amount_gte') return parseFloat(amount) >= parseFloat(r.condition_value);
+      if (r.condition_type === 'amount_lte') return parseFloat(amount) <= parseFloat(r.condition_value);
+      if (r.condition_type === 'user_exists_gc') return gcUserStatus === 'updated';
+      if (r.condition_type === 'user_not_exists_gc') return gcUserStatus === 'added';
+      return false;
+    });
+
+    const mapping = !matchedRule ? mappings.find(m =>
+      (m.lava_product_name && productName.toLowerCase().includes(m.lava_product_name.toLowerCase())) ||
+      (m.lava_offer_id && (m.lava_offer_id === offerId || m.lava_offer_id === invoiceId))
+    ) : null;
+
+    let gcUserId = '';
+    let gcDealId = '';
+    let gcError = '';
+    let gcStatus = 'success';
+
+    if (!matchedRule && !mapping) {
+      // No rule/mapping — just log the payment
+      db.prepare(`INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?)`)
+        .run(uuidv4(), invoiceId, buyerEmail, productName, amount, currency, 'Правило/маппинг не найдены', new Date().toISOString());
+      return;
+    }
+
+    try {
+      if (matchedRule) {
+        for (const action of matchedRule.actions) {
+          if (action.type === 'authorize') {
+            const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } });
+            if (userRes.success) {
+              gcUserId = String(userRes.result?.user_id || '');
+              const isNew = userRes.result?.user_status === 'added';
+              logAction(isNew ? 'user_created' : 'user_authorized', buyerEmail, { user_id: gcUserId, product: productName, rule: matchedRule.name, source: 'webhook' });
+            } else throw new Error(userRes.error_message || 'Ошибка авторизации');
+          } else if (action.type === 'add_to_group') {
+            const userRes = await gcApiCall(settings, 'users', { user: { email: buyerEmail, group_name: [action.group_name] }, system: { refresh_if_exists: 1 } });
+            if (userRes.success) {
+              gcUserId = String(userRes.result?.user_id || '');
+              logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: action.group_name, product: productName, rule: matchedRule.name, source: 'webhook' });
+            } else throw new Error(userRes.error_message || 'Ошибка добавления в группу');
+          } else if (action.type === 'grant_product') {
+            const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
+            if (action.offer_code) dealParams.deal.offer_code = action.offer_code;
+            if (action.product_title) dealParams.deal.product_title = action.product_title;
+            const dealRes = await gcApiCall(settings, 'deals', dealParams);
+            if (dealRes.success) {
+              gcDealId = String(dealRes.result?.deal_id || '');
+              logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: action.offer_code, product: productName, rule: matchedRule.name, source: 'webhook' });
+            } else throw new Error(dealRes.error_message || 'Ошибка выдачи продукта');
+          }
+        }
+      } else {
+        if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
+          const userParams = { user: { email: buyerEmail }, system: { refresh_if_exists: 1 } };
+          if (mapping.gc_group_name) userParams.user.group_name = [mapping.gc_group_name];
+          const userRes = await gcApiCall(settings, 'users', userParams);
+          if (userRes.success) {
+            gcUserId = String(userRes.result?.user_id || '');
+            logAction('added_to_group', buyerEmail, { user_id: gcUserId, group: mapping.gc_group_name, product: productName, source: 'webhook' });
+          } else throw new Error(userRes.error_message || 'Ошибка создания пользователя');
+        }
+        if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
+          const dealParams = { user: { email: buyerEmail }, deal: { deal_cost: amount, deal_is_paid: 'yes' }, system: { refresh_if_exists: 1 } };
+          if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
+          if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
+          const dealRes = await gcApiCall(settings, 'deals', dealParams);
+          if (dealRes.success) {
+            gcDealId = String(dealRes.result?.deal_id || '');
+            logAction('product_granted', buyerEmail, { deal_id: gcDealId, offer_code: mapping.gc_offer_code, product: productName, source: 'webhook' });
+          } else throw new Error(dealRes.error_message || 'Ошибка создания заказа');
+        }
+      }
+    } catch (e) {
+      gcStatus = 'error';
+      gcError = e.message;
+      logAction('gc_error', buyerEmail, { product: productName, source: 'webhook' }, 'error', e.message);
+    }
+
+    db.prepare(`INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_user_id, gc_deal_id, gc_status, gc_error, processed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(uuidv4(), invoiceId, buyerEmail, productName, amount, currency, gcUserId, gcDealId, gcStatus, gcError, new Date().toISOString());
+
+    console.log(`Webhook processed: ${buyerEmail} / ${productName} → ${gcStatus}`);
+  } catch (e) {
+    console.error('Webhook processing error:', e.message);
+  }
+});
+
 // ─── Action Log Helper ───
 function logAction(action_type, email, details, status = 'success', error_message = '') {
   db.prepare(`INSERT INTO action_log (id, action_type, email, details, status, error_message) VALUES (?, ?, ?, ?, ?, ?)`)
@@ -357,23 +519,16 @@ app.get('/api/lava/all-products', async (req, res) => {
   const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
   const products = new Map();
   try {
-    // From /v2/products (active products)
-    const pRes = await fetch('https://gate.lava.top/api/v2/products', { headers });
-    if (pRes.ok) {
+    // From /v2/products with feedVisibility=ALL (paginate via nextPage)
+    let url = 'https://gate.lava.top/api/v2/products?feedVisibility=ALL&page=1&size=100';
+    for (let i = 0; i < 10 && url; i++) {
+      const pRes = await fetch(url, { headers });
+      if (!pRes.ok) break;
       const pData = await pRes.json();
       for (const p of (pData.items || [])) {
         products.set(p.id, { id: p.id, name: p.title, type: p.type, offers: p.offers || [] });
       }
-    }
-    // From /v1/sales (includes deleted products)
-    const sRes = await fetch('https://gate.lava.top/api/v1/sales/?page=1&size=100', { headers });
-    if (sRes.ok) {
-      const sData = await sRes.json();
-      for (const s of (sData.items || [])) {
-        if (!products.has(s.productId)) {
-          products.set(s.productId, { id: s.productId, name: s.title, type: 'FROM_SALES', offers: [] });
-        }
-      }
+      url = pData.nextPage || '';
     }
     res.json(Array.from(products.values()));
   } catch (e) {
