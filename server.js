@@ -90,6 +90,24 @@ if (!existingSettings) {
   }
 }
 
+// Seed settings from environment variables (survives Render redeploys)
+{
+  const envLava = process.env.LAVA_API_KEY || '';
+  const envGcAccount = process.env.GC_ACCOUNT || '';
+  const envGcSecret = process.env.GC_SECRET || '';
+  const envWebhookSecret = process.env.WEBHOOK_SECRET || '';
+  const envPollInterval = process.env.POLL_INTERVAL ? parseInt(process.env.POLL_INTERVAL) : null;
+  const envIsActive = process.env.SYNC_ACTIVE === '1' ? 1 : null;
+  const current = db.prepare('SELECT * FROM settings WHERE id = ?').get('main');
+  if (envLava && !current.lava_api_key) db.prepare("UPDATE settings SET lava_api_key = ? WHERE id = 'main'").run(envLava);
+  if (envGcAccount && !current.gc_account) db.prepare("UPDATE settings SET gc_account = ? WHERE id = 'main'").run(envGcAccount);
+  if (envGcSecret && !current.gc_secret) db.prepare("UPDATE settings SET gc_secret = ? WHERE id = 'main'").run(envGcSecret);
+  if (envWebhookSecret && !current.webhook_secret) db.prepare("UPDATE settings SET webhook_secret = ? WHERE id = 'main'").run(envWebhookSecret);
+  if (envPollInterval !== null) db.prepare("UPDATE settings SET poll_interval = ? WHERE id = 'main'").run(envPollInterval);
+  if (envIsActive !== null) db.prepare("UPDATE settings SET is_active = ? WHERE id = 'main'").run(envIsActive);
+  if (envLava || envGcAccount || envGcSecret) console.log('Settings seeded from environment variables');
+}
+
 app.use(express.json());
 app.use(express.static(__dirname));
 
