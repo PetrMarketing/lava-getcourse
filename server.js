@@ -849,6 +849,146 @@ async function gcApiCall(settings, endpoint, params) {
   return await res.json();
 }
 
+// ─── Payment Pages ───
+
+// Create invoice via LavaTop API
+app.post('/api/create-invoice', async (req, res) => {
+  const { email, offerId, currency } = req.body;
+  if (!email || !offerId) return res.status(400).json({ error: 'Email и offerId обязательны' });
+
+  const settings = db.prepare('SELECT lava_api_key FROM settings WHERE id = ?').get('main');
+  if (!settings?.lava_api_key) return res.status(400).json({ error: 'API ключ LavaTop не настроен' });
+
+  try {
+    const body = { email, offerId, currency: currency || 'EUR' };
+    const lavaRes = await fetch('https://gate.lava.top/api/v3/invoice', {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': settings.lava_api_key,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    if (!lavaRes.ok) {
+      const errText = await lavaRes.text();
+      return res.status(lavaRes.status).json({ error: `LavaTop: ${errText}` });
+    }
+    const data = await lavaRes.json();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Payment page
+app.get('/pay/:offerId', async (req, res) => {
+  const { offerId } = req.params;
+  const settings = db.prepare('SELECT lava_api_key FROM settings WHERE id = ?').get('main');
+
+  // Find product info for this offer
+  let productTitle = '';
+  let prices = [];
+  if (settings?.lava_api_key) {
+    try {
+      const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
+      let url = 'https://gate.lava.top/api/v2/products?feedVisibility=ALL&page=1&size=100';
+      for (let i = 0; i < 10 && url; i++) {
+        const pRes = await fetch(url, { headers });
+        if (!pRes.ok) break;
+        const pData = await pRes.json();
+        for (const p of (pData.items || [])) {
+          for (const o of (p.offers || [])) {
+            if (o.id === offerId) {
+              productTitle = p.title || o.name || '';
+              prices = o.prices || [];
+            }
+          }
+        }
+        if (productTitle) break;
+        url = pData.nextPage || '';
+      }
+    } catch (e) { console.error('Pay page product lookup:', e.message); }
+  }
+
+  const priceDisplay = prices.map(p => `${p.amount} ${p.currency}`).join(' / ') || '';
+
+  res.send(`<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${productTitle || 'Оплата'}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+.pay-card { background: #161b22; border: 1px solid #30363d; border-radius: 16px; padding: 40px; width: 420px; max-width: 90vw; text-align: center; }
+.pay-card h1 { font-size: 22px; margin-bottom: 8px; }
+.pay-card .price { color: #7c5dfa; font-size: 18px; font-weight: 600; margin-bottom: 24px; }
+.pay-card .form-group { text-align: left; margin-bottom: 16px; }
+.pay-card label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; }
+.pay-card input, .pay-card select { width: 100%; padding: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; color: #e1e4e8; font-size: 15px; outline: none; }
+.pay-card input:focus, .pay-card select:focus { border-color: #7c5dfa; }
+.pay-btn { width: 100%; padding: 14px; background: #7c5dfa; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
+.pay-btn:hover { background: #6c4de6; }
+.pay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.error { color: #f85149; font-size: 13px; margin-top: 12px; display: none; }
+.spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="pay-card">
+  <h1>${productTitle || 'Оплата'}</h1>
+  <div class="price">${priceDisplay}</div>
+  <div class="form-group">
+    <label>Ваш email</label>
+    <input type="email" id="email" placeholder="email@example.com" required>
+  </div>
+  <div class="form-group">
+    <label>Валюта</label>
+    <select id="currency">
+      ${prices.map(p => `<option value="${p.currency}">${p.currency} — ${p.amount}</option>`).join('') || '<option value="EUR">EUR</option><option value="USD">USD</option><option value="RUB">RUB</option>'}
+    </select>
+  </div>
+  <button class="pay-btn" id="payBtn" onclick="pay()">Оплатить</button>
+  <div class="error" id="error"></div>
+</div>
+<script>
+async function pay() {
+  const email = document.getElementById('email').value.trim();
+  if (!email) { showError('Введите email'); return; }
+  const currency = document.getElementById('currency').value;
+  const btn = document.getElementById('payBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Создание платежа...';
+  hideError();
+  try {
+    const res = await fetch('/api/create-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, offerId: '${offerId}', currency })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Ошибка');
+    if (data.paymentUrl) {
+      window.location.href = data.paymentUrl;
+    } else {
+      showError('Не удалось получить ссылку на оплату');
+    }
+  } catch (e) {
+    showError(e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Оплатить';
+}
+function showError(msg) { const el = document.getElementById('error'); el.textContent = msg; el.style.display = 'block'; }
+function hideError() { document.getElementById('error').style.display = 'none'; }
+</script>
+</body>
+</html>`);
+});
+
 // ─── Polling ───
 
 let pollTimer = null;

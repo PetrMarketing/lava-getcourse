@@ -169,6 +169,7 @@ tr:hover td { background: #1c2128; }
   <button class="tab-btn" onclick="switchTab('rules')">Правила</button>
   <button class="tab-btn" onclick="switchTab('mappings')">Маппинг продуктов</button>
   <button class="tab-btn" onclick="switchTab('logs')">Журнал</button>
+  <button class="tab-btn" onclick="switchTab('links')">Ссылки на оплату</button>
   <button class="tab-btn" onclick="switchTab('actions')">Журнал действий</button>
 </div>
 
@@ -347,6 +348,20 @@ tr:hover td { background: #1c2128; }
     <div class="pagination" id="logsPagination"></div>
   </div>
 
+  <!-- ─── Payment Links Tab ─── -->
+  <div class="tab-panel" id="panel-links">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div>
+        <h3 style="font-size: 18px;">Ссылки на оплату</h3>
+        <p style="color: #8b949e; font-size: 13px; margin-top: 4px;">Единая ссылка для каждого продукта. Покупатель вводит email → оплачивает → вебхук → GetCourse.</p>
+      </div>
+      <button class="btn btn-secondary" onclick="loadPaymentLinks()">Обновить</button>
+    </div>
+    <div id="paymentLinksList">
+      <div class="empty-state">Загрузка продуктов...</div>
+    </div>
+  </div>
+
   <!-- ─── Actions Tab ─── -->
   <div class="tab-panel" id="panel-actions">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -510,6 +525,7 @@ function switchTab(name) {
   if (name === 'logs') { loadLogs(); loadStats(); }
   if (name === 'mappings') loadMappings();
   if (name === 'rules') loadRules();
+  if (name === 'links') loadPaymentLinks();
   if (name === 'actions') loadActionLog();
 }
 
@@ -1171,6 +1187,52 @@ async function clearActionLog() {
   } catch (e) {
     toast('Ошибка: ' + e.message, 'error');
   }
+}
+
+// ─── Payment Links ───
+async function loadPaymentLinks() {
+  const container = document.getElementById('paymentLinksList');
+  container.innerHTML = '<div class="empty-state"><span class="spinner"></span> Загрузка продуктов...</div>';
+  try {
+    const products = await api('GET', '/api/lava/all-products');
+    if (!products.length) {
+      container.innerHTML = '<div class="empty-state">Нет продуктов. Проверьте API ключ LavaTop.</div>';
+      return;
+    }
+    const base = window.location.origin;
+    container.innerHTML = products.map(p => {
+      const offers = p.offers || [];
+      if (!offers.length) return '';
+      return offers.map(o => {
+        const prices = (o.prices || []).map(pr => `${pr.amount} ${pr.currency}`).join(' / ');
+        const link = `${base}/pay/${o.id}`;
+        return `<div class="rule-card">
+          <div class="rule-header">
+            <div>
+              <span class="rule-name">${esc(p.name)}</span>
+              <span class="badge badge-info" style="margin-left: 8px;">${esc(p.type)}</span>
+            </div>
+          </div>
+          <div style="color: #7c5dfa; font-size: 15px; font-weight: 600; margin-bottom: 10px;">${prices}</div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" value="${esc(link)}" readonly style="flex:1; padding:8px 12px; background:#0d1117; border:1px solid #30363d; border-radius:6px; color:#e1e4e8; font-size:13px; font-family:monospace;">
+            <button class="btn btn-secondary btn-sm" onclick="copyText(this, '${esc(link)}')">Копировать</button>
+            <a href="${esc(link)}" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none;">Открыть</a>
+          </div>
+        </div>`;
+      }).join('');
+    }).join('');
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Скопировано!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  }).catch(() => {});
 }
 
 // ─── Webhook ───
