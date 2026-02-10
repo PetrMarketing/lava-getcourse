@@ -265,134 +265,137 @@ async function syncPayments(manual = false) {
   let processed = 0;
   let errors = 0;
   let skipped = 0;
+  let totalSales = 0;
+
+  const headers = { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' };
+  const mappings = db.prepare('SELECT * FROM mappings WHERE is_active = 1').all();
 
   try {
-    // Build query params
-    const params = new URLSearchParams({
-      invoiceStatuses: 'COMPLETED',
-      page: '1',
-      size: '50'
-    });
-    if (settings.last_sync_at) {
-      params.set('beginDate', settings.last_sync_at);
-    }
+    // Step 1: Get all products
+    const productsRes = await fetch('https://gate.lava.top/api/v2/products', { headers });
+    if (!productsRes.ok) throw new Error(`LavaTop products error: ${productsRes.status}`);
+    const productsData = await productsRes.json();
+    const products = productsData.items || productsData || [];
 
-    const lavaRes = await fetch(`https://gate.lava.top/api/v2/invoices?${params}`, {
-      headers: { 'X-Api-Key': settings.lava_api_key, 'Accept': 'application/json' }
-    });
+    // Step 2: For each product, fetch sales with pagination
+    for (const product of products) {
+      let page = 1;
+      let totalPages = 1;
 
-    if (!lavaRes.ok) {
-      const errText = await lavaRes.text();
-      throw new Error(`LavaTop API error: ${lavaRes.status} ${errText}`);
-    }
+      while (page <= totalPages) {
+        const salesUrl = `https://gate.lava.top/api/v1/sales/${product.id}?page=${page}&size=50`;
+        const salesRes = await fetch(salesUrl, { headers });
+        if (!salesRes.ok) { page++; continue; }
 
-    const data = await lavaRes.json();
-    const invoices = data.items || [];
+        const salesData = await salesRes.json();
+        totalPages = salesData.totalPages || 1;
+        const sales = salesData.items || [];
 
-    // Get all active mappings
-    const mappings = db.prepare('SELECT * FROM mappings WHERE is_active = 1').all();
+        for (const sale of sales) {
+          totalSales++;
 
-    for (const invoice of invoices) {
-      const invoiceId = invoice.id;
+          // Unique key: sale id + created timestamp (LavaTop reuses IDs across sales)
+          const saleUniqueId = `${sale.id}_${sale.created}`;
 
-      // Skip already processed
-      const existing = db.prepare('SELECT id FROM sync_log WHERE lava_invoice_id = ?').get(invoiceId);
-      if (existing) { skipped++; continue; }
+          // Skip already processed
+          const existing = db.prepare('SELECT id FROM sync_log WHERE lava_invoice_id = ?').get(saleUniqueId);
+          if (existing) { skipped++; continue; }
 
-      const buyerEmail = invoice.buyer?.email;
-      const productName = invoice.product?.name || '';
-      const offerId = invoice.product?.offer || '';
-      const amount = invoice.receipt?.amount || 0;
-      const currency = invoice.receipt?.currency || '';
+          // Only process completed sales
+          if (sale.status !== 'completed') { skipped++; continue; }
 
-      if (!buyerEmail) {
-        // Log as error — no email
-        db.prepare(`
-          INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error)
-          VALUES (?, ?, ?, ?, ?, ?, 'error', ?)
-        `).run(uuidv4(), invoiceId, '', productName, amount, currency, 'Email покупателя отсутствует');
-        errors++;
-        continue;
-      }
+          const buyerEmail = sale.buyer?.email;
+          const productName = sale.product?.name || product.title || '';
+          const productId = sale.product?.id || product.id || '';
+          const amount = sale.amountTotal?.amount || 0;
+          const currency = sale.amountTotal?.currency || '';
 
-      // Find mapping by product name or offer id
-      const mapping = mappings.find(m =>
-        (m.lava_product_name && productName.toLowerCase().includes(m.lava_product_name.toLowerCase())) ||
-        (m.lava_offer_id && m.lava_offer_id === offerId)
-      );
-
-      if (!mapping) {
-        db.prepare(`
-          INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error)
-          VALUES (?, ?, ?, ?, ?, ?, 'error', ?)
-        `).run(uuidv4(), invoiceId, buyerEmail, productName, amount, currency, 'Маппинг не найден для продукта');
-        errors++;
-        continue;
-      }
-
-      // Process in GetCourse
-      let gcUserId = '';
-      let gcDealId = '';
-      let gcError = '';
-      let gcStatus = 'success';
-
-      try {
-        // Step 1: Create user (+ add to group if needed)
-        if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
-          const userParams = {
-            user: { email: buyerEmail },
-            system: { refresh_if_exists: 1 }
-          };
-          if (mapping.gc_group_name) {
-            userParams.user.group_name = [mapping.gc_group_name];
+          if (!buyerEmail) {
+            db.prepare(`
+              INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?)
+            `).run(uuidv4(), saleUniqueId, '', productName, amount, currency, 'Email покупателя отсутствует', sale.created || new Date().toISOString());
+            errors++;
+            continue;
           }
 
-          const userRes = await gcApiCall(settings, 'users', userParams);
-          if (userRes.success) {
-            gcUserId = String(userRes.result?.user_id || '');
-          } else {
-            throw new Error(userRes.error_message || 'Ошибка создания пользователя в GetCourse');
+          // Find mapping by product name or product/offer id
+          const mapping = mappings.find(m =>
+            (m.lava_product_name && productName.toLowerCase().includes(m.lava_product_name.toLowerCase())) ||
+            (m.lava_offer_id && (m.lava_offer_id === productId || m.lava_offer_id === sale.id))
+          );
+
+          if (!mapping) {
+            db.prepare(`
+              INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_status, gc_error, processed_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?)
+            `).run(uuidv4(), saleUniqueId, buyerEmail, productName, amount, currency, 'Маппинг не найден для продукта', sale.created || new Date().toISOString());
+            errors++;
+            continue;
           }
+
+          // Process in GetCourse
+          let gcUserId = '';
+          let gcDealId = '';
+          let gcError = '';
+          let gcStatus = 'success';
+
+          try {
+            // Create user (+ add to group if needed)
+            if (mapping.gc_action === 'group' || mapping.gc_action === 'both') {
+              const userParams = {
+                user: { email: buyerEmail },
+                system: { refresh_if_exists: 1 }
+              };
+              if (mapping.gc_group_name) {
+                userParams.user.group_name = [mapping.gc_group_name];
+              }
+              const userRes = await gcApiCall(settings, 'users', userParams);
+              if (userRes.success) {
+                gcUserId = String(userRes.result?.user_id || '');
+              } else {
+                throw new Error(userRes.error_message || 'Ошибка создания пользователя в GetCourse');
+              }
+            }
+
+            // Create deal (training access) if needed
+            if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
+              const dealParams = {
+                user: { email: buyerEmail },
+                deal: { deal_cost: amount, deal_is_paid: 'yes' },
+                system: { refresh_if_exists: 1 }
+              };
+              if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
+              if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
+              const dealRes = await gcApiCall(settings, 'deals', dealParams);
+              if (dealRes.success) {
+                gcDealId = String(dealRes.result?.deal_id || '');
+              } else {
+                throw new Error(dealRes.error_message || 'Ошибка создания заказа в GetCourse');
+              }
+            }
+          } catch (e) {
+            gcStatus = 'error';
+            gcError = e.message;
+          }
+
+          db.prepare(`
+            INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_user_id, gc_deal_id, gc_status, gc_error, processed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(uuidv4(), saleUniqueId, buyerEmail, productName, amount, currency, gcUserId, gcDealId, gcStatus, gcError, sale.created || new Date().toISOString());
+
+          if (gcStatus === 'success') processed++;
+          else errors++;
         }
 
-        // Step 2: Create deal (training access) if needed
-        if (mapping.gc_action === 'deal' || mapping.gc_action === 'both') {
-          const dealParams = {
-            user: { email: buyerEmail },
-            deal: {
-              deal_cost: amount,
-              deal_is_paid: 'yes'
-            },
-            system: { refresh_if_exists: 1 }
-          };
-          if (mapping.gc_offer_code) dealParams.deal.offer_code = mapping.gc_offer_code;
-          if (mapping.gc_product_title) dealParams.deal.product_title = mapping.gc_product_title;
-
-          const dealRes = await gcApiCall(settings, 'deals', dealParams);
-          if (dealRes.success) {
-            gcDealId = String(dealRes.result?.deal_id || '');
-          } else {
-            throw new Error(dealRes.error_message || 'Ошибка создания заказа в GetCourse');
-          }
-        }
-      } catch (e) {
-        gcStatus = 'error';
-        gcError = e.message;
+        page++;
       }
-
-      db.prepare(`
-        INSERT INTO sync_log (id, lava_invoice_id, buyer_email, product_name, amount, currency, gc_user_id, gc_deal_id, gc_status, gc_error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(uuidv4(), invoiceId, buyerEmail, productName, amount, currency, gcUserId, gcDealId, gcStatus, gcError);
-
-      if (gcStatus === 'success') processed++;
-      else errors++;
     }
 
     // Update last sync time
     db.prepare("UPDATE settings SET last_sync_at = ? WHERE id = 'main'").run(new Date().toISOString());
 
-    return { processed, errors, skipped, total: invoices.length };
+    return { processed, errors, skipped, total: totalSales };
   } catch (e) {
     console.error('Sync error:', e.message);
     return { error: e.message, processed, errors };
