@@ -92,12 +92,12 @@ if (!existingSettings) {
 
 // Seed settings from environment variables (survives Render redeploys)
 {
-  const envLava = process.env.LAVA_API_KEY || '';
-  const envGcAccount = process.env.GC_ACCOUNT || '';
-  const envGcSecret = process.env.GC_SECRET || '';
-  const envWebhookSecret = process.env.WEBHOOK_SECRET || '';
-  const envPollInterval = process.env.POLL_INTERVAL ? parseInt(process.env.POLL_INTERVAL) : null;
-  const envIsActive = process.env.SYNC_ACTIVE === '1' ? 1 : null;
+  const envLava = process.env.LAVA_API_KEY || 'voiK0UAigPWtG0v1r8hqe8ABmKElGeAOGt3950mcmFbT80yaIRhOwJGuI84aMVfl';
+  const envGcAccount = process.env.GC_ACCOUNT || 'systemicaa';
+  const envGcSecret = process.env.GC_SECRET || 'UPPi1hmDBl5ttHXppjHsUjO5l9yxqk2dIuLyko9xraqqnqPGXaNC91sAoSBsdtqfG65p5O37rycYDnC6Jh2dFavNImvx9NTRRXFZsBZWNtrIWZrwkqSxEu3KitGYPQqV';
+  const envWebhookSecret = process.env.WEBHOOK_SECRET || '4a8a88f5-05a8-4af1-a7be-c27ea907c0dc';
+  const envPollInterval = process.env.POLL_INTERVAL ? parseInt(process.env.POLL_INTERVAL) : 120;
+  const envIsActive = process.env.SYNC_ACTIVE !== '0' ? 1 : null;
   const current = db.prepare('SELECT * FROM settings WHERE id = ?').get('main');
   if (envLava && !current.lava_api_key) db.prepare("UPDATE settings SET lava_api_key = ? WHERE id = 'main'").run(envLava);
   if (envGcAccount && !current.gc_account) db.prepare("UPDATE settings SET gc_account = ? WHERE id = 'main'").run(envGcAccount);
@@ -109,6 +109,30 @@ if (!existingSettings) {
 }
 
 app.use(express.json());
+
+// ─── Basic Auth ───
+const AUTH_USER = process.env.AUTH_USER || 'prov02';
+const AUTH_PASS = process.env.AUTH_PASS || 'PetrVideo20021604';
+
+function basicAuth(req, res, next) {
+  // Skip auth for webhook (external service calls it)
+  if (req.path === '/api/webhook/lava') return next();
+  // Skip auth for payment pages (public)
+  if (req.path.startsWith('/pay/')) return next();
+  // Skip auth for invoice creation (called from payment page)
+  if (req.path === '/api/create-invoice') return next();
+
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString();
+    const [user, pass] = decoded.split(':');
+    if (user === AUTH_USER && pass === AUTH_PASS) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="LavaTop-GetCourse"');
+  res.status(401).send('Требуется авторизация');
+}
+
+app.use(basicAuth);
 app.use(express.static(__dirname));
 
 // ─── LavaTop Webhook ───
