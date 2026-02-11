@@ -1093,4 +1093,13 @@ function restartPolling() {
 app.listen(PORT, () => {
   console.log(`LavaTop ↔ GetCourse integration running on http://localhost:${PORT}`);
   restartPolling();
+
+  // Keep-alive: ping self every 14 min to prevent Render free tier from sleeping
+  const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
+  if (APP_URL) {
+    setInterval(() => {
+      fetch(APP_URL + '/api/settings').catch(() => {});
+    }, 14 * 60 * 1000);
+    console.log('Keep-alive enabled:', APP_URL);
+  }
 });
