@@ -110,6 +110,47 @@ if (!existingSettings) {
   if (envLava || envGcAccount || envGcSecret) console.log('Settings seeded from environment variables');
 }
 
+// Seed default rules if none exist
+{
+  const existingRules = await query('SELECT id FROM rules');
+  if (existingRules.length === 0) {
+    const defaultRules = [
+      {
+        name: 'минимум тест',
+        condition_type: 'product_equals',
+        condition_value: 'ПРОДВИЖЕНИЕ 2026: Базовый минимум',
+        actions: [{ type: 'condition', condition: 'user_exists_gc',
+          then_actions: [{ type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - базовый минимум' }],
+          else_actions: [{ type: 'authorize' }, { type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - базовый минимум' }]
+        }]
+      },
+      {
+        name: 'минимум',
+        condition_type: 'product_equals',
+        condition_value: 'Продвижение 2026: Базовый минимум',
+        actions: [{ type: 'condition', condition: 'user_exists_gc',
+          then_actions: [{ type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - базовый минимум' }],
+          else_actions: [{ type: 'authorize' }, { type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - базовый минимум' }]
+        }]
+      },
+      {
+        name: 'максимум',
+        condition_type: 'product_equals',
+        condition_value: 'Продвижение 2026: Роскошный максимум',
+        actions: [{ type: 'condition', condition: 'user_exists_gc',
+          then_actions: [{ type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - Роскошный максимум' }],
+          else_actions: [{ type: 'authorize' }, { type: 'add_to_group', group_name: 'ПРОДВИЖЕНИЕ 2026 - Роскошный максимум' }]
+        }]
+      }
+    ];
+    for (const r of defaultRules) {
+      await execute('INSERT INTO rules (id, name, condition_type, condition_value, actions) VALUES (?, ?, ?, ?, ?)',
+        uuidv4(), r.name, r.condition_type, r.condition_value, JSON.stringify(r.actions));
+    }
+    console.log('Default rules seeded:', defaultRules.length);
+  }
+}
+
 app.use(express.json());
 
 // ─── Basic Auth ───
