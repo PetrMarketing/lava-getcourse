@@ -121,16 +121,71 @@ function basicAuth(req, res, next) {
   if (req.path.startsWith('/pay/')) return next();
   // Skip auth for invoice creation (called from payment page)
   if (req.path === '/api/create-invoice') return next();
+  // Skip auth for login page itself
+  if (req.path === '/login') return next();
+  if (req.path === '/api/login') return next();
 
-  const header = req.headers.authorization || '';
-  if (header.startsWith('Basic ')) {
-    const decoded = Buffer.from(header.slice(6), 'base64').toString();
-    const [user, pass] = decoded.split(':');
-    if (user === AUTH_USER && pass === AUTH_PASS) return next();
-  }
-  res.set('WWW-Authenticate', 'Basic realm="LavaTop-GetCourse"');
-  res.status(401).send('Требуется авторизация');
+  // Check session cookie
+  const cookie = req.headers.cookie || '';
+  const match = cookie.match(/auth_token=([^;]+)/);
+  if (match && match[1] === Buffer.from(`${AUTH_USER}:${AUTH_PASS}`).toString('base64')) return next();
+
+  // API calls get 401 JSON
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Redirect to login page
+  res.redirect('/login');
 }
+
+// ─── Login page ───
+app.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход — LavaTop → GetCourse</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;width:360px;max-width:90vw}
+.login-card h2{text-align:center;margin-bottom:24px;font-size:20px}
+.login-card h2 span{color:#7c5dfa}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:13px;color:#8b949e;margin-bottom:6px}
+.form-group input{width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;outline:none}
+.form-group input:focus{border-color:#7c5dfa}
+.btn{width:100%;padding:10px;border:none;border-radius:6px;font-size:14px;cursor:pointer;background:#7c5dfa;color:#fff;font-weight:500}
+.btn:hover{background:#6c4de6}
+.error{color:#f85149;font-size:13px;text-align:center;margin-top:12px;display:none}
+</style></head><body>
+<div class="login-card">
+<h2><span>LavaTop</span> → GetCourse</h2>
+<form onsubmit="return doLogin(event)">
+<div class="form-group"><label>Логин</label><input type="text" id="user" autocomplete="username" required></div>
+<div class="form-group"><label>Пароль</label><input type="password" id="pass" autocomplete="current-password" required></div>
+<button class="btn" type="submit">Войти</button>
+<div class="error" id="err">Неверный логин или пароль</div>
+</form></div>
+<script>
+async function doLogin(e){
+  e.preventDefault();
+  const user=document.getElementById('user').value;
+  const pass=document.getElementById('pass').value;
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,pass})});
+  if(r.ok){window.location.href='/';}
+  else{document.getElementById('err').style.display='block';}
+  return false;
+}
+</script></body></html>`);
+});
+
+app.post('/api/login', (req, res) => {
+  const { user, pass } = req.body || {};
+  if (user === AUTH_USER && pass === AUTH_PASS) {
+    const token = Buffer.from(`${AUTH_USER}:${AUTH_PASS}`).toString('base64');
+    res.set('Set-Cookie', `auth_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`);
+    res.json({ ok: true });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
 
 app.use(basicAuth);
 app.use(express.static(__dirname));
