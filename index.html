@@ -483,19 +483,51 @@ tr:hover td { background: #1c2128; }
         <option value="email_contains">Email содержит</option>
         <option value="amount_gte">Сумма &gt;=</option>
         <option value="amount_lte">Сумма &lt;=</option>
-        <option value="user_exists_gc">Пользователь есть в GetCourse</option>
-        <option value="user_not_exists_gc">Пользователя нет в GetCourse</option>
       </select>
     </div>
     <div class="form-group" id="ruleConditionValueWrap">
       <label id="ruleConditionValueLabel">Значение</label>
       <div id="ruleConditionValueContainer"></div>
     </div>
-    <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-      <label style="font-size: 13px; color: #8b949e;">Действия (выполняются по порядку)</label>
-      <button class="btn btn-secondary btn-sm" onclick="addRuleAction()">+ Действие</button>
+    <!-- GC condition toggle -->
+    <div class="form-group" id="gcConditionWrap">
+      <div class="toggle-wrap" style="margin-bottom: 10px;">
+        <label class="toggle">
+          <input type="checkbox" id="gcConditionEnabled" onchange="toggleGcCondition()">
+          <div class="slider"></div>
+        </label>
+        <span style="font-size: 13px; color: #8b949e;">Проверять пользователя в GetCourse</span>
+      </div>
+      <div id="gcConditionSettings" style="display: none;">
+        <select id="gcConditionType" style="width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;margin-bottom:12px;">
+          <option value="user_exists_gc">Пользователь есть в GC</option>
+          <option value="user_not_exists_gc">Пользователя нет в GC</option>
+        </select>
+        <div class="condition-block">
+          <div class="condition-label then">
+            <span>&#9989; Тогда:</span>
+            <button class="btn btn-secondary btn-sm" onclick="addRuleAction(null, document.getElementById('thenActionsContainer'))">+ Действие</button>
+          </div>
+          <div id="thenActionsContainer"></div>
+        </div>
+        <div class="condition-block">
+          <div class="condition-label else">
+            <span>&#10060; Иначе:</span>
+            <button class="btn btn-secondary btn-sm" onclick="addRuleAction(null, document.getElementById('elseActionsContainer'))">+ Действие</button>
+          </div>
+          <div id="elseActionsContainer"></div>
+        </div>
+      </div>
     </div>
-    <div id="ruleActionsContainer"></div>
+
+    <!-- Simple actions (when GC condition is off) -->
+    <div id="simpleActionsWrap">
+      <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <label style="font-size: 13px; color: #8b949e;">Действия (выполняются по порядку)</label>
+        <button class="btn btn-secondary btn-sm" onclick="addRuleAction()">+ Действие</button>
+      </div>
+      <div id="ruleActionsContainer"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeRuleModal()">Отмена</button>
       <button class="btn btn-primary" onclick="saveRule()">Сохранить</button>
@@ -843,8 +875,7 @@ async function ensureDataLoaded() {
 const conditionLabels = {
   product_equals: 'Продукт =', product_contains: 'Продукт содержит',
   email_equals: 'Email =', email_contains: 'Email содержит',
-  amount_gte: 'Сумма >=', amount_lte: 'Сумма <=',
-  user_exists_gc: 'Пользователь есть в GC', user_not_exists_gc: 'Пользователя нет в GC'
+  amount_gte: 'Сумма >=', amount_lte: 'Сумма <='
 };
 const actionLabelsMap = { authorize: 'Авторизовать', add_to_group: 'Добавить в группу', grant_product: 'Выдать продукт', condition: 'Условие' };
 const actionIcons = { authorize: '&#128100;', add_to_group: '&#128101;', grant_product: '&#127891;', condition: '&#9878;' };
@@ -887,7 +918,6 @@ async function loadRules() {
     container.innerHTML = rules.map(r => {
       const actionsHtml = renderRuleActionsHtml(r.actions);
 
-      const showValue = !['user_exists_gc','user_not_exists_gc'].includes(r.condition_type);
       return `<div class="rule-card ${r.is_active ? '' : 'inactive'}">
         <div class="rule-header">
           <div>
@@ -902,7 +932,7 @@ async function loadRules() {
         </div>
         <div class="rule-condition">
           <span class="cond-label">${conditionLabels[r.condition_type] || r.condition_type}</span>
-          ${showValue ? `<span class="cond-value">${esc(r.condition_value)}</span>` : ''}
+          <span class="cond-value">${esc(r.condition_value)}</span>
         </div>
         <div class="rule-actions-list">${actionsHtml || '<div style="color:#8b949e;font-size:13px;">Нет действий</div>'}</div>
       </div>`;
@@ -919,12 +949,30 @@ async function openRuleModal(data) {
   document.getElementById('ruleName').value = data?.name || '';
   document.getElementById('ruleConditionType').value = data?.condition_type || 'product_equals';
   renderConditionValueInput(data?.condition_type || 'product_equals', data?.condition_value || '');
-  const container = document.getElementById('ruleActionsContainer');
-  container.innerHTML = '';
-  if (data?.actions?.length) {
-    data.actions.forEach(a => addRuleAction(a));
+
+  // Clear all action containers
+  document.getElementById('ruleActionsContainer').innerHTML = '';
+  document.getElementById('thenActionsContainer').innerHTML = '';
+  document.getElementById('elseActionsContainer').innerHTML = '';
+
+  // Check if actions contain a condition block
+  const condAction = data?.actions?.find(a => a.type === 'condition');
+  if (condAction) {
+    document.getElementById('gcConditionEnabled').checked = true;
+    document.getElementById('gcConditionType').value = condAction.condition || 'user_exists_gc';
+    document.getElementById('gcConditionSettings').style.display = 'block';
+    document.getElementById('simpleActionsWrap').style.display = 'none';
+    (condAction.then_actions || []).forEach(a => addRuleAction(a, document.getElementById('thenActionsContainer')));
+    (condAction.else_actions || []).forEach(a => addRuleAction(a, document.getElementById('elseActionsContainer')));
   } else {
-    addRuleAction({ type: 'authorize' });
+    document.getElementById('gcConditionEnabled').checked = false;
+    document.getElementById('gcConditionSettings').style.display = 'none';
+    document.getElementById('simpleActionsWrap').style.display = 'block';
+    if (data?.actions?.length) {
+      data.actions.forEach(a => addRuleAction(a));
+    } else {
+      addRuleAction({ type: 'authorize' });
+    }
   }
   document.getElementById('ruleModal').classList.add('active');
 }
@@ -942,12 +990,6 @@ function renderConditionValueInput(type, currentValue) {
   const wrap = document.getElementById('ruleConditionValueWrap');
   const label = document.getElementById('ruleConditionValueLabel');
   const container = document.getElementById('ruleConditionValueContainer');
-
-  if (type === 'user_exists_gc' || type === 'user_not_exists_gc') {
-    wrap.style.display = 'none';
-    container.innerHTML = '<input type="hidden" id="ruleConditionValue" value="*">';
-    return;
-  }
   wrap.style.display = 'block';
 
   if (type === 'product_equals') {
@@ -972,22 +1014,29 @@ function renderConditionValueInput(type, currentValue) {
 
 function addRuleAction(data, container) {
   if (!container) container = document.getElementById('ruleActionsContainer');
+  const type = data?.type || 'authorize';
+  if (type === 'condition') return; // conditions handled via GC toggle, not action list
   const div = document.createElement('div');
-  div.className = 'action-row' + (data?.type === 'condition' ? ' condition-row' : '');
+  div.className = 'action-row';
   div.innerHTML = `
     <div class="action-row-header">
       <select onchange="onActionTypeChange(this)">
-        <option value="authorize" ${data?.type === 'authorize' ? 'selected' : ''}>Авторизовать в GC</option>
-        <option value="add_to_group" ${data?.type === 'add_to_group' ? 'selected' : ''}>Добавить в группу</option>
-        <option value="grant_product" ${data?.type === 'grant_product' ? 'selected' : ''}>Выдать доступ к продукту</option>
-        <option value="condition" ${data?.type === 'condition' ? 'selected' : ''}>Условие (если/иначе)</option>
+        <option value="authorize" ${type === 'authorize' ? 'selected' : ''}>Авторизовать в GC</option>
+        <option value="add_to_group" ${type === 'add_to_group' ? 'selected' : ''}>Добавить в группу</option>
+        <option value="grant_product" ${type === 'grant_product' ? 'selected' : ''}>Выдать доступ к продукту</option>
       </select>
       <button class="btn-remove" onclick="this.closest('.action-row').remove()" title="Удалить">&times;</button>
     </div>
     <div class="action-params"></div>
   `;
   container.appendChild(div);
-  renderActionParams(div, data?.type || 'authorize', data);
+  renderActionParams(div, type, data);
+}
+
+function toggleGcCondition() {
+  const enabled = document.getElementById('gcConditionEnabled').checked;
+  document.getElementById('gcConditionSettings').style.display = enabled ? 'block' : 'none';
+  document.getElementById('simpleActionsWrap').style.display = enabled ? 'none' : 'block';
 }
 
 function onActionTypeChange(sel) {
@@ -997,8 +1046,6 @@ function onActionTypeChange(sel) {
 
 function renderActionParams(row, type, data) {
   const params = row.querySelector('.action-params');
-  // Toggle condition-row class
-  row.classList.toggle('condition-row', type === 'condition');
   if (type === 'authorize') {
     params.innerHTML = '<span style="color:#8b949e;font-size:12px;">Создаёт/обновляет пользователя в GetCourse</span>';
   } else if (type === 'add_to_group') {
@@ -1013,61 +1060,13 @@ function renderActionParams(row, type, data) {
       <input type="text" placeholder="Код оффера (offer_code)" value="${esc(data?.offer_code || '')}" data-field="offer_code">
       <input type="text" placeholder="Название продукта (product_title)" value="${esc(data?.product_title || '')}" data-field="product_title" style="margin-top:4px;">
     `;
-  } else if (type === 'condition') {
-    params.innerHTML = `
-      <select class="condition-select" data-field="condition">
-        <option value="user_exists_gc" ${data?.condition === 'user_exists_gc' ? 'selected' : ''}>Пользователь есть в GC</option>
-        <option value="user_not_exists_gc" ${data?.condition === 'user_not_exists_gc' ? 'selected' : ''}>Пользователя нет в GC</option>
-      </select>
-      <div class="condition-block">
-        <div class="condition-label then"><span>&#9989; Тогда:</span><button class="btn btn-secondary btn-sm" onclick="addNestedAction(this, 'then')">+ Действие</button></div>
-        <div class="nested-actions" data-branch="then"></div>
-      </div>
-      <div class="condition-block">
-        <div class="condition-label else"><span>&#10060; Иначе:</span><button class="btn btn-secondary btn-sm" onclick="addNestedAction(this, 'else')">+ Действие</button></div>
-        <div class="nested-actions" data-branch="else"></div>
-      </div>
-    `;
-    // Populate existing then/else actions
-    const thenContainer = params.querySelector('[data-branch="then"]');
-    const elseContainer = params.querySelector('[data-branch="else"]');
-    (data?.then_actions || []).forEach(a => addRuleAction(a, thenContainer));
-    (data?.else_actions || []).forEach(a => addRuleAction(a, elseContainer));
   }
 }
 
-function addNestedAction(btn, branch) {
-  const block = btn.closest('.condition-block');
-  const container = block.querySelector('.nested-actions');
-  addRuleAction({ type: 'authorize' }, container);
-  // Remove "condition" option from nested selects to prevent infinite nesting
-  const lastRow = container.lastElementChild;
-  if (lastRow) {
-    const sel = lastRow.querySelector('.action-row-header select');
-    if (sel) {
-      const condOpt = sel.querySelector('option[value="condition"]');
-      if (condOpt) condOpt.remove();
-    }
-  }
-}
-
-function collectRuleActions(container) {
-  if (!container) container = document.getElementById('ruleActionsContainer');
-  // Only collect direct child action-rows (not nested ones inside condition blocks)
+function collectActionsFromContainer(container) {
   const rows = Array.from(container.children).filter(el => el.classList.contains('action-row'));
   return rows.map(row => {
     const type = row.querySelector('.action-row-header select').value;
-    if (type === 'condition') {
-      const condSelect = row.querySelector('.action-params [data-field="condition"]');
-      const thenContainer = row.querySelector('.action-params [data-branch="then"]');
-      const elseContainer = row.querySelector('.action-params [data-branch="else"]');
-      return {
-        type: 'condition',
-        condition: condSelect ? condSelect.value : 'user_exists_gc',
-        then_actions: thenContainer ? collectRuleActions(thenContainer) : [],
-        else_actions: elseContainer ? collectRuleActions(elseContainer) : []
-      };
-    }
     const action = { type };
     row.querySelectorAll('.action-params [data-field]').forEach(el => {
       const val = el.value.trim();
@@ -1077,19 +1076,41 @@ function collectRuleActions(container) {
   });
 }
 
+function collectRuleActions() {
+  const gcEnabled = document.getElementById('gcConditionEnabled').checked;
+  if (gcEnabled) {
+    const condition = document.getElementById('gcConditionType').value;
+    const thenActions = collectActionsFromContainer(document.getElementById('thenActionsContainer'));
+    const elseActions = collectActionsFromContainer(document.getElementById('elseActionsContainer'));
+    return [{
+      type: 'condition',
+      condition,
+      then_actions: thenActions,
+      else_actions: elseActions
+    }];
+  }
+  return collectActionsFromContainer(document.getElementById('ruleActionsContainer'));
+}
+
 async function saveRule() {
   const id = document.getElementById('ruleEditId').value;
   const condType = document.getElementById('ruleConditionType').value;
   const condValue = document.getElementById('ruleConditionValue').value.trim();
-  const noValueNeeded = ['user_exists_gc', 'user_not_exists_gc'].includes(condType);
+  const actions = collectRuleActions();
   const data = {
     name: document.getElementById('ruleName').value.trim(),
     condition_type: condType,
-    condition_value: noValueNeeded ? '*' : condValue,
-    actions: collectRuleActions()
+    condition_value: condValue,
+    actions
   };
-  if (!noValueNeeded && !data.condition_value) { toast('Укажите значение условия', 'error'); return; }
-  if (!data.actions.length) { toast('Добавьте хотя бы одно действие', 'error'); return; }
+  if (!data.condition_value) { toast('Укажите значение условия', 'error'); return; }
+  const gcEnabled = document.getElementById('gcConditionEnabled').checked;
+  if (gcEnabled) {
+    const condAct = actions[0];
+    if (!condAct?.then_actions?.length && !condAct?.else_actions?.length) { toast('Добавьте действия в ветки "Тогда" или "Иначе"', 'error'); return; }
+  } else {
+    if (!actions.length) { toast('Добавьте хотя бы одно действие', 'error'); return; }
+  }
 
   try {
     if (id) {
