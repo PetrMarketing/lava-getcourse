@@ -959,6 +959,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .pay-btn { width: 100%; padding: 14px; background: #7c5dfa; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
 .pay-btn:hover { background: #6c4de6; }
 .pay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.consent-group { text-align: left; margin: 16px 0 8px; }
+.consent-item { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.consent-item input[type="checkbox"] { margin-top: 3px; min-width: 16px; min-height: 16px; accent-color: #7c5dfa; cursor: pointer; }
+.consent-item label { font-size: 12px; color: #8b949e; line-height: 1.4; cursor: pointer; }
+.consent-item label a { color: #7c5dfa; text-decoration: underline; }
+.consent-item label a:hover { color: #9d8aff; }
 .error { color: #f85149; font-size: 13px; margin-top: 12px; display: none; }
 .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -978,7 +984,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
       ${prices.map(p => `<option value="${p.currency}">${p.currency} — ${p.amount}</option>`).join('') || '<option value="EUR">EUR</option><option value="USD">USD</option><option value="RUB">RUB</option>'}
     </select>
   </div>
-  <button class="pay-btn" id="payBtn" onclick="pay()">Оплатить</button>
+  <div class="consent-group">
+    <div class="consent-item">
+      <input type="checkbox" id="consent1" onchange="checkConsents()">
+      <label for="consent1">Я выражаю согласие с условиями <a href="https://docs.google.com/document/d/1ctYUQ6UADAqGAfwKS-DCVMRuEJHF6u3j/edit?usp=sharing&rtpof=true&sd=true" target="_blank">договора оферты</a>.</label>
+    </div>
+    <div class="consent-item">
+      <input type="checkbox" id="consent2" onchange="checkConsents()">
+      <label for="consent2">Выражаю <a href="https://docs.google.com/document/d/11cptTegHJvtConG8Ps3KB8cEVCW5yggJ/edit" target="_blank">согласие</a> на обработку персональных данных в соответствии с Политикой обработки персональных данных.</label>
+    </div>
+    <div class="consent-item">
+      <input type="checkbox" id="consent3" onchange="checkConsents()">
+      <label for="consent3">Выражаю <a href="https://docs.google.com/document/d/1zAuN1Dc7T8dex71fZouu0FwcuhOFjWEk/e" target="_blank">согласие</a> на обработку персональных данных в целях получения рассылок информационного и рекламного характера.</label>
+    </div>
+  </div>
+  <button class="pay-btn" id="payBtn" onclick="pay()" disabled>Оплатить</button>
   <div class="error" id="error"></div>
 </div>
 <script>
@@ -1008,6 +1028,10 @@ async function pay() {
   }
   btn.disabled = false;
   btn.textContent = 'Оплатить';
+}
+function checkConsents() {
+  const all = document.getElementById('consent1').checked && document.getElementById('consent2').checked && document.getElementById('consent3').checked;
+  document.getElementById('payBtn').disabled = !all;
 }
 function showError(msg) { const el = document.getElementById('error'); el.textContent = msg; el.style.display = 'block'; }
 function hideError() { document.getElementById('error').style.display = 'none'; }
