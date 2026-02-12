@@ -995,7 +995,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     </div>
     <div class="consent-item">
       <input type="checkbox" id="consent3" onchange="checkConsents()">
-      <label for="consent3">Выражаю <a href="https://docs.google.com/document/d/1zAuN1Dc7T8dex71fZouu0FwcuhOFjWEk/e" target="_blank">согласие</a> на обработку персональных данных в целях получения рассылок информационного и рекламного характера.</label>
+      <label for="consent3">Выражаю <a href="https://docs.google.com/document/d/1zAuN1Dc7T8dex71fZouu0FwcuhOFjWEk/edit?usp=sharing&ouid=112097162664762305764&rtpof=true&sd=true" target="_blank">согласие</a> на обработку персональных данных в целях получения рассылок информационного и рекламного характера.</label>
     </div>
   </div>
   <button class="pay-btn" id="payBtn" onclick="pay()" disabled>Оплатить</button>
